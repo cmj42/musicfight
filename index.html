@@ -1,0 +1,1733 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MusicFight — 体感音游 MVP (技能战斗测试)</title>
+<style>
+  :root{
+    --blue:#3ad7ff;    /* 左手 / left hand */
+    --red:#ff3a6e;     /* 右手 / right hand */
+    --gold:#ffd23a;
+    --green:#36e27a;
+    --bg:#06070f;
+    --panel:rgba(12,16,30,.86);
+    --txt:#e8ecff;
+    --dim:#8a93b8;
+  }
+  *{box-sizing:border-box;-webkit-user-select:none;user-select:none}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
+    font-family:"Segoe UI",system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;overflow:hidden}
+  #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
+  canvas{display:block;background:transparent;max-width:100%;max-height:100%}
+
+  /* ---- Start / loading overlay ---- */
+  #overlay{position:fixed;inset:0;z-index:30;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:18px;
+    background:radial-gradient(1200px 700px at 50% 30%,#101830,#04050c 75%);text-align:center;padding:24px}
+  #overlay h1{margin:0;font-size:42px;letter-spacing:2px;
+    background:linear-gradient(90deg,var(--blue),var(--red));-webkit-background-clip:text;
+    background-clip:text;color:transparent;text-shadow:0 0 30px rgba(80,140,255,.25)}
+  #overlay p{margin:0;max-width:560px;color:var(--dim);line-height:1.7;font-size:14px}
+  #startBtn{margin-top:6px;padding:14px 40px;font-size:18px;border:none;border-radius:40px;cursor:pointer;
+    color:#04050c;font-weight:700;letter-spacing:1px;
+    background:linear-gradient(90deg,var(--blue),var(--red));box-shadow:0 0 40px rgba(90,150,255,.5)}
+  #startBtn:active{transform:translateY(1px)}
+  #startBtn[disabled]{filter:grayscale(.6) brightness(.7);cursor:wait}
+  .hint{font-size:12px;color:var(--dim)}
+  kbd{background:#1b2240;border:1px solid #2c365f;border-radius:5px;padding:1px 7px;font-size:12px}
+  #err{color:#ff8aa8;font-size:13px;max-width:560px;white-space:pre-wrap;line-height:1.6}
+
+  /* ---- Settings panel ---- */
+  #gear{position:fixed;top:12px;right:12px;z-index:20;width:42px;height:42px;border-radius:50%;
+    background:var(--panel);display:flex;align-items:center;justify-content:center;
+    cursor:pointer;font-size:20px;border:1px solid #2a335c}
+  #panel{position:fixed;top:62px;right:12px;z-index:20;width:288px;max-height:86vh;overflow:auto;
+    background:var(--panel);border:1px solid #2a335c;border-radius:14px;padding:14px 16px;
+    backdrop-filter:blur(8px);display:none;font-size:13px}
+  #panel.show{display:block}
+  #panel h3{margin:2px 0 10px;font-size:13px;color:var(--blue);letter-spacing:1px;text-transform:uppercase}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:9px 0}
+  .row label{color:var(--dim);flex:0 0 auto}
+  .row input[type=range]{flex:1;accent-color:var(--blue)}
+  .row .val{flex:0 0 46px;text-align:right;font-variant-numeric:tabular-nums;color:var(--txt)}
+  .row select,.row input[type=file]{font-size:12px;max-width:150px}
+  .seg{display:flex;gap:6px;margin:8px 0}
+  .seg button{flex:1;padding:6px;border-radius:8px;border:1px solid #2c365f;background:#121831;color:var(--txt);cursor:pointer;font-size:12px}
+  .seg button.on{background:var(--blue);color:#04050c;border-color:var(--blue);font-weight:700}
+  .pbtn{width:100%;padding:9px;margin-top:6px;border-radius:9px;border:1px solid #2c365f;
+    background:#141a33;color:var(--txt);cursor:pointer;font-size:13px}
+  .pbtn:active{transform:translateY(1px)}
+  .sep{height:1px;background:#222a4d;margin:12px 0}
+  .tip{font-size:11px;color:var(--dim);line-height:1.5;margin-top:4px}
+  #toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:25;
+    background:var(--panel);border:1px solid #2a335c;border-radius:10px;padding:8px 16px;font-size:13px;display:none}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="game" width="1280" height="720"></canvas></div>
+
+<div id="gear" title="设置 / Settings">⚙</div>
+<div id="panel">
+  <h3>检测 Detection</h3>
+  <div class="row"><label>模式</label>
+    <select id="cfgTest"><option value="0">正式 (教学→游戏)</option><option value="1">练习 (自由出拳)</option></select></div>
+  <div class="row"><label>出拳信号</label>
+    <select id="cfgMode">
+      <option value="auto">自动 (挥动+向前)</option>
+      <option value="image">挥动速度 (xy)</option>
+      <option value="depth">向前/深度 (z)</option>
+    </select></div>
+  <div class="row"><label>灵敏度(阈值)</label><input id="cfgTrig" type="range" min="1" max="20" step="0.5"><span class="val" id="vTrig"></span></div>
+  <div class="row"><label>平滑(防抖)</label><input id="cfgSmooth" type="range" min="0.3" max="5" step="0.1"><span class="val" id="vSmooth"></span></div>
+  <div class="tip">自适应滤波：静止更稳、出拳不拖延。还嫌抖→「平滑」调小；嫌延迟→调大。阈值设在中央柱子"静止值"之上一点。</div>
+  <div class="row"><label>高线 ↑</label><input id="cfgLineHigh" type="range" min="-0.4" max="0.6" step="0.02"><span class="val" id="vLineHigh"></span></div>
+  <div class="row"><label>低线 ↓</label><input id="cfgLineLow" type="range" min="0.4" max="1.2" step="0.02"><span class="val" id="vLineLow"></span></div>
+  <div class="row"><label>左手线 →</label><input id="cfgLineLeft" type="range" min="0" max="0.8" step="0.02"><span class="val" id="vLineLeft"></span></div>
+  <div class="row"><label>右手线 ←</label><input id="cfgLineRight" type="range" min="0" max="0.8" step="0.02"><span class="val" id="vLineRight"></span></div>
+  <div class="tip">四条判定线(调试叠加里可见)：起点须在中间、终点越过线才算。高线/低线=高低拳上下界(身高比)；左/右手线=平拳要越过身体中线多远(身宽比)。</div>
+  <div class="seg"><button id="crossBtn" class="on">过线必须 ✓</button><button id="mirrorBtn" class="on">镜像 ✓</button><button id="dbgBtn" class="on">调试 ✓</button></div>
+
+  <div class="sep"></div>
+  <h3>节奏 Rhythm</h3>
+  <div class="row"><label>BPM</label><input id="cfgBpm" type="range" min="60" max="160" step="1"><span class="val" id="vBpm"></span></div>
+  <div class="row"><label>球速(ms)</label><input id="cfgApproach" type="range" min="600" max="3000" step="50"><span class="val" id="vApproach"></span></div>
+  <div class="row"><label>校准(ms)</label><input id="cfgCal" type="range" min="-300" max="300" step="5"><span class="val" id="vCal"></span></div>
+  <div class="row"><label>判定窗(ms)</label><input id="cfgWin" type="range" min="80" max="350" step="5"><span class="val" id="vWin"></span></div>
+  <div class="tip">校准: 若总是判 Late 就调小, 总是 Early 就调大。</div>
+
+  <div class="sep"></div>
+  <h3>技能 Skills</h3>
+  <div class="row"><label>A 槽</label>
+    <select id="cfgSkillA">
+      <option value="rupture">过载断层 / 伤害</option>
+      <option value="repair">回声修复 / 回血</option>
+    </select></div>
+  <div class="row"><label>B 槽</label>
+    <select id="cfgSkillB">
+      <option value="repair">回声修复 / 回血</option>
+      <option value="rupture">过载断层 / 伤害</option>
+    </select></div>
+  <div class="tip">MIDI 只给 A/B 两条技能触发轨；这里决定触发轨到点时实际使用哪个技能音色和效果。</div>
+
+  <div class="sep"></div>
+  <h3>音乐 Music</h3>
+  <button class="pbtn" id="loadMusicBtn">加载我的音乐 (mp3/ogg/wav)</button>
+  <input id="musicFile" type="file" accept="audio/*" style="display:none" />
+  <div class="tip" id="musicName">当前: 内置节拍 (无需文件)</div>
+  <button class="pbtn" id="restartBtn">重新开始 ↺</button>
+</div>
+
+<div id="toast"></div>
+
+<div id="overlay">
+  <h1>MusicFight</h1>
+  <p>体感音游。站到摄像头前(上半身入画)。开始后先学<strong>6 个基础动作</strong>，然后进入<strong>技能教学</strong>：MIDI 触发轨给出技能窗口，游戏按当前 A/B 槽技能渲染对应音色与效果。</p>
+  <button id="startBtn">点击开始 (允许摄像头)</button>
+  <div class="hint">按 <kbd>D</kbd> 切换调试叠加 · <kbd>Space</kbd> 暂停 · 右上角 ⚙ 调参数</div>
+  <div id="err"></div>
+</div>
+
+<script type="module">
+import { PoseLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+import { loadSaveData, writeSaveData, markCleared, isUnlocked, isCleared, defaultSave } from './save.js';
+import { CHAPTERS } from './chapters.js';
+
+/* ============================================================
+   PURE GAME LOGIC  (unit-tested separately, no DOM/MediaPipe)
+   ============================================================ */
+const LANES = ['high','mid','low'];
+const BATTLE_MIDI_URL = 'skill_battle_test.mid';   // flat layout (root) for simple static hosting
+const BATTLE_BPM = 132;
+const MAX_ENEMY_HP = 320;
+const MAX_PLAYER_HP = 100;
+
+// Lane from wrist height. y grows downward; torso = shoulder->hip span.
+function laneFromY(wristY, shoulderY, hipY, cfg){
+  const torso = Math.max(1e-4, hipY - shoulderY);
+  const highCut = shoulderY + cfg.highFrac * torso;
+  const lowCut  = shoulderY + cfg.lowFrac  * torso;
+  if (wristY < highCut) return 'high';
+  if (wristY < lowCut)  return 'mid';
+  return 'low';
+}
+
+// Rising-edge punch detector with refractory reset (per hand).
+function newPunch(){ return { state:'ready', activation:0 }; }
+function updatePunch(d, activation, cfg){
+  let fired = false;
+  d.activation = activation;
+  if (d.state === 'ready'){
+    if (activation > cfg.triggerLevel){ fired = true; d.state = 'cooldown'; }
+  } else {
+    if (activation < cfg.resetLevel){ d.state = 'ready'; }
+  }
+  return fired;
+}
+
+// Judge a punch against active balls. Times in ms (game clock). cal applied to punch.
+function judgeHit(punchTime, hand, lane, balls, cfg){
+  const t = punchTime + cfg.calibration;
+  let best=null, bestAbs=Infinity;
+  for (const b of balls){
+    if (b.hit || b.missed) continue;
+    if (b.hand!==hand || b.lane!==lane) continue;
+    const ad = Math.abs(t - b.tHit);
+    if (ad <= cfg.goodWindow && ad < bestAbs){ bestAbs=ad; best=b; }
+  }
+  if (!best) return { result:'whiff', delta:null, ball:null };
+  const delta = t - best.tHit;
+  const result = Math.abs(delta) <= cfg.perfectWindow ? 'perfect' : 'good';
+  return { result, delta, ball:best };
+}
+
+/* ============================================================
+   CONFIG (live-tunable)
+   ============================================================ */
+const cfg = {
+  testMode:false,         // true = free-practice (dev); false = tutorial -> game flow
+  mode:'image',           // 'auto' | 'image' (xy speed, best for horizontal punches) | 'depth' (z)
+  triggerLevel:4.0, resetLevel:2.4,
+  minCutoff:1.5,          // One Euro filter: lower = smoother at rest (the "平滑" slider)
+  beta:0.6, dCutoff:1.0,  // One Euro tuning (fixed)
+  velWindow:60,           // ms window for velocity
+  minGap:200,             // ms refractory between punches
+  trajWindow:150,         // ms swing window used to classify the punch trajectory
+  // four judgment lines — start must be in the middle, end must cross a line:
+  lineHigh:-0.32,         // vy (0=shoulders,1=hips): end above this => HIGH
+  lineLow:0.64,           // vy: end below this => LOW
+  lineLeft:0.15,          // shoulder-widths RIGHT of center: left hand must cross past it
+  lineRight:0.15,         // shoulder-widths LEFT of center: right hand must cross past it
+  requireCross:true,      // require the hand to cross its line (off = any fast swing counts)
+  bpm:BATTLE_BPM, approach:1600, calibration:-120,  // calibration: punch-input latency compensation (ms)
+  attackGap:60000/BATTLE_BPM*1.5,   // 1.5 music beats (~682ms) — attacks lock to the BGM's 8th-note grid
+  goodWindow:280, perfectWindow:120,         // forgiving casual hit windows
+  mirror:true, debug:false,
+};
+
+/* ============================================================
+   DOM
+   ============================================================ */
+const cv = document.getElementById('game');
+const ctx = cv.getContext('2d');
+const overlay = document.getElementById('overlay');
+const startBtn = document.getElementById('startBtn');
+const errBox = document.getElementById('err');
+const toastEl = document.getElementById('toast');
+let toastT = 0;
+function toast(m){ toastEl.textContent=m; toastEl.style.display='block'; toastT=performance.now()+1800; }
+
+// hidden video element for the camera
+const video = document.createElement('video');
+video.autoplay = true; video.playsInline = true; video.muted = true;
+
+/* ============================================================
+   AUDIO  (master clock + generated beat + loaded song)
+   ============================================================ */
+let actx=null, master=null;
+let songBuf=null, songSrc=null, usingSong=false;
+let midiSong=null, usingMidi=false, midiEventIndex=0, midiLoop=0, midiStartedAtSec=0, noiseBuffer=null;
+const MIDI_LOOKAHEAD_SEC = 0.35;
+const MIDI_FALLBACK_BARS = 32;
+let t0 = 0;           // game ms at beat 0
+let started=false, paused=false, pauseAt=0;
+
+function gameNow(){ return actx ? actx.currentTime*1000 - t0 : 0; }
+
+function beep(time, freq, dur, gain){
+  const o=actx.createOscillator(), g=actx.createGain();
+  o.frequency.value=freq; o.type='triangle';
+  g.gain.setValueAtTime(0,time);
+  g.gain.linearRampToValueAtTime(gain,time+0.005);
+  g.gain.exponentialRampToValueAtTime(0.0001,time+dur);
+  o.connect(g).connect(master); o.start(time); o.stop(time+dur+0.02);
+}
+// schedule metronome clicks a bit ahead (only when no song loaded)
+let nextClickBeat=0;
+function scheduleClicks(){
+  if (usingSong || usingMidi || !actx || phase!=='game') return;
+  const beat = 60/cfg.bpm;
+  const ahead = actx.currentTime + 0.2;
+  while (t0/1000 + nextClickBeat*beat < ahead){
+    const tt = t0/1000 + nextClickBeat*beat;
+    if (tt > actx.currentTime) beep(tt, nextClickBeat%4===0?660:440, 0.06, nextClickBeat%4===0?0.25:0.13);
+    nextClickBeat++;
+  }
+}
+
+async function loadSong(file){
+  try{
+    const buf = await file.arrayBuffer();
+    songBuf = await actx.decodeAudioData(buf);
+    usingSong = true;
+    document.getElementById('musicName').textContent = '当前: '+file.name;
+    toast('音乐已加载，重开生效');
+  }catch(e){ toast('音频解码失败: '+e.message); }
+}
+function startSong(){
+  if (!usingSong || !songBuf) return;
+  usingMidi = false;
+  songSrc = actx.createBufferSource();
+  songSrc.buffer = songBuf; songSrc.loop = true;
+  songSrc.connect(master);
+  // align song start with beat 0 (t0)
+  songSrc.start(t0/1000);
+}
+
+function u16(d,p){ return (d[p]<<8)|d[p+1]; }
+function u32(d,p){ return (d[p]<<24)|(d[p+1]<<16)|(d[p+2]<<8)|d[p+3]; }
+function ascii(d,p,n){ let s=''; for(let i=0;i<n;i++) s+=String.fromCharCode(d[p+i]); return s; }
+function readVlq(d,pos){
+  let value=0;
+  while(true){
+    const b=d[pos++]; value=(value<<7)|(b&0x7f);
+    if(!(b&0x80)) return [value,pos];
+  }
+}
+function midiHz(pitch){ return 440*Math.pow(2,(pitch-69)/12); }
+function skillSlotFromTrack(track){
+  if(track.startsWith('SKILL_TRIG_A')) return 'A';
+  if(track.startsWith('SKILL_TRIG_B')) return 'B';
+  return null;
+}
+function finalizeMidiSong(song){
+  const bins=128, wave=Array(bins).fill(0);
+  const dur=Math.max(0.001,song.durationSec);
+  for(const e of song.events){
+    if(e.slot) continue;
+    const from=Math.max(0,Math.floor(e.timeSec/dur*bins));
+    const to=Math.min(bins-1,Math.floor((e.timeSec+Math.max(0.04,e.durationSec))/dur*bins));
+    const weight=(e.velocity/127)*(e.channel===9?1.35:e.channel===1?1.1:0.65);
+    for(let i=from;i<=to;i++) wave[i]+=weight;
+  }
+  const peak=Math.max(0.001,...wave);
+  song.waveform=wave.map(v=>Math.min(1,v/peak));
+  song.events.sort((a,b)=>a.timeSec-b.timeSec);
+  song.triggerEvents.sort((a,b)=>a.timeMs-b.timeMs);
+  return song;
+}
+function parseMidiFile(buffer){
+  const d=new Uint8Array(buffer);
+  if(ascii(d,0,4)!=='MThd') throw new Error('not a MIDI file');
+  const headerLen=u32(d,4), fmt=u16(d,8), trackCount=u16(d,10), ppq=u16(d,12);
+  if(fmt!==1 && fmt!==0) throw new Error('unsupported MIDI format '+fmt);
+  let pos=8+headerLen, tempoUs=500000, endTick=0;
+  const notes=[];
+  for(let ti=0;ti<trackCount;ti++){
+    if(ascii(d,pos,4)!=='MTrk') throw new Error('missing MTrk');
+    const len=u32(d,pos+4), trackEnd=pos+8+len;
+    let cpos=pos+8, tick=0, running=0, trackName='Track '+(ti+1);
+    const open=new Map();
+    while(cpos<trackEnd){
+      let delta; [delta,cpos]=readVlq(d,cpos); tick+=delta; endTick=Math.max(endTick,tick);
+      let status=d[cpos];
+      if(status<0x80){
+        if(!running) throw new Error('bad running status');
+        status=running;
+      }else{
+        cpos++;
+        if(status<0xf0) running=status;
+      }
+      if(status===0xff){
+        const kind=d[cpos++]; let size; [size,cpos]=readVlq(d,cpos);
+        const payloadStart=cpos; cpos+=size;
+        if(kind===0x03) trackName=ascii(d,payloadStart,size);
+        else if(kind===0x51 && size===3) tempoUs=(d[payloadStart]<<16)|(d[payloadStart+1]<<8)|d[payloadStart+2];
+        else if(kind===0x2f) break;
+        continue;
+      }
+      if(status===0xf0 || status===0xf7){
+        let size; [size,cpos]=readVlq(d,cpos); cpos+=size; continue;
+      }
+      const event=status&0xf0, channel=status&0x0f;
+      const dataLen=(event===0xc0 || event===0xd0)?1:2;
+      const a=d[cpos++], b=dataLen===2?d[cpos++]:0;
+      if(event===0x90 && b>0){
+        const key=channel+':'+a;
+        if(!open.has(key)) open.set(key,[]);
+        open.get(key).push({tick,velocity:b});
+      }else if(event===0x80 || (event===0x90 && b===0)){
+        const key=channel+':'+a, arr=open.get(key);
+        if(arr && arr.length){
+          const st=arr.shift();
+          notes.push({track:trackName,channel,pitch:a,start:st.tick,end:tick,velocity:st.velocity});
+        }
+      }
+    }
+    for(const [key,arr] of open){
+      const [channel,pitch]=key.split(':').map(Number);
+      for(const st of arr) notes.push({track:trackName,channel,pitch,start:st.tick,end:tick,velocity:st.velocity});
+    }
+    pos=trackEnd;
+  }
+  const secondsPerTick=tempoUs/1_000_000/ppq;
+  const events=notes.map(n=>({
+    ...n,
+    timeSec:n.start*secondsPerTick,
+    durationSec:Math.max(0.015,(n.end-n.start)*secondsPerTick),
+    slot:skillSlotFromTrack(n.track)
+  })).sort((a,b)=>a.timeSec-b.timeSec);
+  const triggerEvents=events.filter(e=>e.slot).map(e=>({
+    slot:e.slot,
+    track:e.track,
+    timeMs:e.timeSec*1000,
+    durationMs:e.durationSec*1000,
+    pitch:e.pitch,
+    label:e.track
+  }));
+  return finalizeMidiSong({ppq,tempoUs,endTick,durationSec:endTick*secondsPerTick,events,triggerEvents,source:'midi'});
+}
+function makeFallbackBattleSong(){
+  const beat=60/BATTLE_BPM, step=beat/4, bars=MIDI_FALLBACK_BARS;
+  const durationSec=bars*4*beat, events=[];
+  const add=(track,channel,pitch,startStep,durSteps,velocity)=>{
+    const timeSec=startStep*step;
+    const durationSec=Math.max(0.025,durSteps*step);
+    const slot=skillSlotFromTrack(track);
+    events.push({track,channel,pitch,velocity,timeSec,durationSec,slot});
+  };
+  const ticks={kick:36,snare:38,rim:37,hat:42,open_hat:46,crash:49,tom_hi:48,tom_mid:45,tom_low:41};
+  const FS2=42,D2=38,A2=45,E2=40,B2=47,CS3=49;
+  const progression=[FS2,D2,A2,E2,FS2,D2,B2,CS3];
+  const chords={
+    [FS2]:[54,57,61,66],[D2]:[50,54,57,62],[A2]:[57,61,64,69],
+    [E2]:[52,56,59,64],[B2]:[59,62,66,71],[CS3]:[61,65,68,73]
+  };
+  const kickPatterns=[[0,3,6,8,11,14],[0,2,6,8,10,14],[0,3,4,8,11,13],[0,2,6,7,8,12,14]];
+  const riffPatterns=[[0,2,3,6,8,10,11,14],[0,3,6,8,9,12,14],[0,2,4,6,8,11,13,14],[0,3,5,6,8,10,12,14]];
+  for(let bar=0;bar<bars;bar++){
+    const phrase=Math.floor(bar/8), root=progression[bar%progression.length], base=bar*16;
+    if(bar%8===0){ add('Drums - chrome breakbeat kit',9,ticks.crash,base,2,110); add('Impacts - enemy hit accents',4,root+36,base,1.5,82); }
+    for(let s=0;s<16;s++){
+      if(s%2===0) add('Drums - chrome breakbeat kit',9,ticks.hat,base+s,0.38,s%4?50:66);
+      else if(phrase>=1 && [3,7,11,15].includes(s)) add('Drums - chrome breakbeat kit',9,ticks.hat,base+s,0.28,32);
+    }
+    for(const s of kickPatterns[(bar+phrase)%kickPatterns.length]) add('Drums - chrome breakbeat kit',9,ticks.kick,base+s,0.68,[0,8].includes(s)?116:102);
+    for(const s of [4,12]){ add('Drums - chrome breakbeat kit',9,ticks.snare,base+s,0.76,118); add('Drums - chrome breakbeat kit',9,ticks.rim,base+s+0.04,0.30,68); }
+    if(bar%4===3){
+      const fill=bar%8===7?[[8,'tom_hi',88],[10,'tom_mid',96],[12,'tom_low',108],[14,'snare',122]]:[[10,'tom_hi',82],[11,'tom_mid',92],[14,'tom_low',104],[15,'snare',118]];
+      for(const [s,name,vel] of fill) add('Drums - chrome breakbeat kit',9,ticks[name],base+s,0.65,vel);
+    }
+    for(const s of riffPatterns[(bar+phrase)%riffPatterns.length]){
+      const dur=s%4?0.72:1.0, vel=88+([0,8].includes(s)?8:0)+phrase*3;
+      add('Synth Riff - gated saw chugs',0,root,base+s,dur,vel);
+      add('Synth Riff - gated saw chugs',0,root+12,base+s+0.03,Math.max(0.34,dur-0.07),vel-10);
+      add('Bass - distorted mono pulse',1,root-12,base+s,dur+0.45,Math.min(122,vel+12));
+    }
+    for(const pitch of chords[root]) add('Pad - cold memory chord bed',2,pitch,base,15.35,46+phrase*4);
+    if(bar%2===0) for(const [s,off] of [[2,24],[6,31],[10,28],[14,36]]) add('Lead - short neon calls',3,root+off,base+s,0.98,62+phrase*5);
+    if(bar%4===2) for(const pitch of [root+24,root+31]) add('Impacts - enemy hit accents',4,pitch,base+8,1.08,74);
+  }
+  const skillDefs=[
+    ['A','SKILL_TRIG_A_DAMAGE',14,96,12],
+    ['B','SKILL_TRIG_B_HEAL',15,98,18],
+    ['A','SKILL_TRIG_A_DAMAGE',14,96,24],
+    ['B','SKILL_TRIG_B_HEAL',15,98,30],
+  ];
+  for(const [slot,track,channel,pitch,bar] of skillDefs) add(track,channel,pitch,bar*16,2,96);
+  const triggerEvents=events.filter(e=>e.slot).map(e=>({
+    slot:e.slot,track:e.track,timeMs:e.timeSec*1000,durationMs:e.durationSec*1000,pitch:e.pitch,label:e.track
+  }));
+  return finalizeMidiSong({ppq:480,tempoUs:Math.round(60_000_000/BATTLE_BPM),endTick:bars*4*480,durationSec,events,triggerEvents,source:'fallback'});
+}
+async function loadBattleMidi(){
+  try{
+    const res=await fetch(BATTLE_MIDI_URL,{cache:'no-store'});
+    if(!res.ok) throw new Error(res.status+' '+res.statusText);
+    midiSong=parseMidiFile(await res.arrayBuffer());
+    document.getElementById('musicName').textContent =
+      `当前: ${BATTLE_MIDI_URL} · MIDI 实时合成 · 技能触发 ${midiSong.triggerEvents.length} 个`;
+  }catch(e){
+    console.warn('MIDI load failed:',e);
+    midiSong=makeFallbackBattleSong();
+    document.getElementById('musicName').textContent =
+      `当前: 内置 MIDI 兜底 · 实时合成 · 技能触发 ${midiSong.triggerEvents.length} 个`;
+  }
+}
+function startMidiSong(){
+  if(!midiSong || usingSong) return false;
+  usingMidi=true; midiEventIndex=0; midiLoop=0; midiStartedAtSec=t0/1000;
+  return true;
+}
+function stopAudioPlayback(){
+  usingMidi=false;
+  if(songSrc){ try{songSrc.stop();}catch(e){} songSrc=null; }
+}
+function connectOut(node,pan=0){
+  if(actx.createStereoPanner){
+    const p=actx.createStereoPanner(); p.pan.value=pan; node.connect(p).connect(master);
+  }else node.connect(master);
+}
+function scheduleTone(time,freq,dur,gain,type='sawtooth',pan=0,filterFreq=3600){
+  if(!actx||!master) return;
+  const t=Math.max(time,actx.currentTime+0.005), d=Math.max(0.02,dur);
+  const osc=actx.createOscillator(), g=actx.createGain(), f=actx.createBiquadFilter();
+  osc.type=type; osc.frequency.setValueAtTime(freq,t);
+  f.type='lowpass'; f.frequency.setValueAtTime(filterFreq,t); f.Q.value=0.8;
+  g.gain.setValueAtTime(0,t);
+  g.gain.linearRampToValueAtTime(gain,t+0.006);
+  g.gain.exponentialRampToValueAtTime(0.0001,t+d);
+  osc.connect(f).connect(g); connectOut(g,pan);
+  osc.start(t); osc.stop(t+d+0.04);
+}
+function scheduleKick(time,vel){
+  const t=Math.max(time,actx.currentTime+0.005), g=actx.createGain(), o=actx.createOscillator();
+  o.type='sine'; o.frequency.setValueAtTime(120,t); o.frequency.exponentialRampToValueAtTime(42,t+0.11);
+  g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(0.22*vel,t+0.004); g.gain.exponentialRampToValueAtTime(0.0001,t+0.30);
+  o.connect(g); connectOut(g,0); o.start(t); o.stop(t+0.34);
+}
+function noiseBuf(){
+  if(noiseBuffer) return noiseBuffer;
+  noiseBuffer=actx.createBuffer(1,actx.sampleRate*2,actx.sampleRate);
+  const a=noiseBuffer.getChannelData(0);
+  for(let i=0;i<a.length;i++) a[i]=Math.random()*2-1;
+  return noiseBuffer;
+}
+function scheduleNoise(time,dur,gain,pan=0,filterType='highpass',freq=2200){
+  const t=Math.max(time,actx.currentTime+0.005), src=actx.createBufferSource(), f=actx.createBiquadFilter(), g=actx.createGain();
+  src.buffer=noiseBuf(); src.loop=true;
+  f.type=filterType; f.frequency.value=freq;
+  g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(gain,t+0.004); g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  src.connect(f).connect(g); connectOut(g,pan); src.start(t); src.stop(t+dur+0.02);
+}
+function scheduleDrum(ev,time){
+  const vel=Math.pow(ev.velocity/127,1.1);
+  if(ev.pitch===36) scheduleKick(time,vel);
+  else if(ev.pitch===38 || ev.pitch===37){ scheduleNoise(time,0.18,0.12*vel,0.02,'bandpass',1800); scheduleTone(time,190,0.12,0.045*vel,'triangle',0.02,1200); }
+  else if(ev.pitch===42) scheduleNoise(time,0.055,0.035*vel,-0.18,'highpass',5200);
+  else if(ev.pitch===46) scheduleNoise(time,0.20,0.045*vel,-0.12,'highpass',4600);
+  else if(ev.pitch===49 || ev.pitch===51) scheduleNoise(time,0.85,0.055*vel,0.16,'highpass',3200);
+  else scheduleTone(time,midiHz(ev.pitch),0.22,0.045*vel,'triangle',0.1,900);
+}
+function scheduleSkillMidiCue(slot,time,dur,velocity){
+  const def=skillDefForSlot(slot), vel=Math.pow(velocity/127,1.05);
+  if(def.id==='repair'){
+    scheduleTone(time,659.25,0.16,0.052*vel,'triangle',0.22,5200);
+    scheduleTone(time+0.07,880,0.18,0.044*vel,'sine',0.18,6200);
+    scheduleTone(time+0.15,1174.66,0.22,0.035*vel,'triangle',0.26,7000);
+  }else{
+    scheduleTone(time,123.47,0.28,0.105*vel,'sawtooth',-0.18,1200);
+    scheduleTone(time+0.025,246.94,0.20,0.070*vel,'square',-0.12,1800);
+    scheduleTone(time+0.055,987.77,0.12,0.040*vel,'sawtooth',-0.05,3800);
+  }
+}
+function playSkillStepSfx(step){                 // crisp rising blip each time you hit a step right
+  if(!actx) return; const t=actx.currentTime+0.01, f=440*Math.pow(1.1892,Math.max(0,step));
+  scheduleTone(t,f,0.12,0.11,'square',0,3400);
+  scheduleTone(t,f*2,0.08,0.05,'triangle',0,6000);
+}
+function playSkillSuccessSfx(def){               // BIG payoff — make it pop over the BGM
+  if(!actx) return; const t=actx.currentTime+0.02;
+  if(def.effect.type==='heal'){
+    scheduleNoise(t,0.6,0.10,0,'highpass',5000);                 // airy shimmer
+    [523.25,659.25,783.99,1046.5,1318.5,1567.98].forEach((f,i)=>{
+      scheduleTone(t+i*0.07,f,0.7,0.14,'triangle',0.12,7200);
+      scheduleTone(t+i*0.07,f*2,0.4,0.05,'sine',0.16,9000);
+    });
+  }else{
+    scheduleNoise(t,0.6,0.34,0,'lowpass',1500); scheduleKick(t,1.0); scheduleKick(t+0.12,0.85);
+    [392,294,196,131,98,82].forEach((f,i)=>{
+      scheduleTone(t+i*0.05,f,0.7,0.22,'sawtooth',-0.08,1700);
+      scheduleTone(t+i*0.05,f*1.5,0.3,0.08,'square',0.05,2400);
+    });
+  }
+}
+function playSkillOpenCue(def){                   // a few beats of the skill's TIMBRE — announces the window opened
+  if(!actx) return; const t=actx.currentTime+0.03, b=60/BATTLE_BPM;
+  if(def.effect.type==='heal'){                   // glass bell, rising
+    [[0,659.25],[b*0.5,783.99],[b,987.77],[b*1.5,1318.5]].forEach(([dt,f])=>{
+      scheduleTone(t+dt,f,0.55,0.14,'triangle',0.16,7000);
+      scheduleTone(t+dt,f*2,0.3,0.06,'sine',0.2,9000);
+    });
+  }else{                                          // fracture saw, driving riff + kick
+    [[0,146.83],[b*0.5,146.83],[b*0.75,220],[b,293.66]].forEach(([dt,f])=>{
+      scheduleTone(t+dt,f,0.30,0.17,'sawtooth',-0.12,1800);
+      scheduleTone(t+dt,f*2,0.16,0.08,'square',0,2800);
+    });
+    scheduleKick(t,0.9); scheduleKick(t+b,0.8);
+  }
+}
+function scheduleMidiEvent(ev,audioTime){
+  if(ev.slot){ scheduleSkillMidiCue(ev.slot,audioTime,ev.durationSec,ev.velocity); return; }
+  const vel=Math.pow(ev.velocity/127,1.15), freq=midiHz(ev.pitch), dur=ev.durationSec;
+  if(ev.channel===9){ scheduleDrum(ev,audioTime); return; }
+  if(ev.channel===0) scheduleTone(audioTime,freq,dur,0.036*vel,'sawtooth',-0.42,1900);
+  else if(ev.channel===1) scheduleTone(audioTime,freq,dur,0.070*vel,'square',0,900);
+  else if(ev.channel===2) scheduleTone(audioTime,freq,dur,0.021*vel,'sawtooth',0.32,2600);
+  else if(ev.channel===3) scheduleTone(audioTime,freq,dur,0.032*vel,'triangle',-0.2,4800);
+  else if(ev.channel===4) scheduleTone(audioTime,freq,dur,0.045*vel,'square',0.1,2200);
+}
+function scheduleMidi(){
+  if(!usingMidi || !midiSong || !actx || phase!=='game') return;
+  const songNow=actx.currentTime-midiStartedAtSec;
+  const until=songNow+MIDI_LOOKAHEAD_SEC;
+  while(midiSong.events.length){
+    const ev=midiSong.events[midiEventIndex];
+    const evTime=midiLoop*midiSong.durationSec+ev.timeSec;
+    if(evTime>until) break;
+    const audioTime=midiStartedAtSec+evTime;
+    if(audioTime>actx.currentTime-0.03) scheduleMidiEvent(ev,audioTime);
+    midiEventIndex++;
+    if(midiEventIndex>=midiSong.events.length){ midiEventIndex=0; midiLoop++; }
+  }
+}
+
+/* ============================================================
+   POSE
+   ============================================================ */
+let pose=null, lastVideoT=-1, det=null, detLatency=0;
+
+async function initPose(){
+  const fileset = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  pose = await PoseLandmarker.createFromOptions(fileset, {
+    baseOptions:{
+      modelAssetPath:"https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+      delegate:"GPU"
+    },
+    runningMode:"VIDEO", numPoses:1
+  });
+}
+
+// landmark indices
+const L = { nose:0, lsho:11, rsho:12, lelb:13, relb:14, lwri:15, rwri:16, lhip:23, rhip:24 };
+
+// per-hand tracking state
+// ---- One Euro filter: adaptive smoothing (steady at rest, low-lag when moving fast) ----
+function _lp(s,x,a){ s.s=(s.s==null)?x:a*x+(1-a)*s.s; return s.s; }
+function _alpha(cutoff,dt){ const tau=1/(2*Math.PI*cutoff); return 1/(1+tau/dt); }
+function oeState(){ return { xlp:{s:null}, dxlp:{s:null}, prev:null }; }
+function oneEuro(st,x,dt){
+  if(st.prev==null) st.prev=x;
+  const dx=(x-st.prev)/dt;
+  const edx=_lp(st.dxlp, dx, _alpha(cfg.dCutoff,dt));
+  const cutoff=cfg.minCutoff + cfg.beta*Math.abs(edx);
+  const xf=_lp(st.xlp, x, _alpha(cutoff,dt));
+  st.prev=x; return xf;
+}
+function newHand(){ return { punch:newPunch(), _pt:null,
+  oe:{x:oeState(),y:oeState(),z:oeState(),sz:oeState()},
+  fx:0.5, fy:0.5, fz:0, fsz:0,
+  hist:[], lastFire:-1e9, pending:null, menu:null, act:0, reachZ:0, vImg:0, vFwd:0, lane:'mid', wx:0.5, wy:0.5, vis:0 }; }
+const hands = { left:newHand(), right:newHand() };
+
+/* ============================================================
+   GAME STATE
+   ============================================================ */
+let balls=[], particles=[], beams=[], pops=[];
+let score=0, combo=0, maxCombo=0, enemyHP=MAX_ENEMY_HP, playerHP=MAX_PLAYER_HP, shake=0;
+let nextStep=0, gameOver=false, win=false;
+let stats={perfect:0,good:0,miss:0};
+
+// ---- phase / tutorial ----
+let phase='intro';                 // 'title' | 'chapterselect' | 'intro' | 'tutorial' | 'skilltutorial' | 'getready' | 'game' | 'gameover' | 'practice'
+let saveData=defaultSave();        // persistent progress (localStorage)
+let currentChapter=0, chapterMaxHP=MAX_ENEMY_HP;   // selected chapter + its enemy HP
+function startChapter(idx){
+  currentChapter=idx; chapterMaxHP=CHAPTERS[idx].enemyHP||MAX_ENEMY_HP;
+  if(saveData.tutorialDone) startGetReady(); else phase='intro';   // first run = teach; after = straight in
+}
+let getReadyWall=0;                // wall-clock ms when the countdown started
+const TUT_NEED=2;                  // successful reps required per move
+let tutStep=0, tutReps=0, tutFlash=null, tutHoldUntil=0;   // tutFlash = {ok, txt, t}; tutHoldUntil = celebrate-then-advance
+const TUTORIAL=[
+  {hand:'left', lane:'high', name:'左上拳', cue:'左拳快速上击，越过头顶高线'},
+  {hand:'left', lane:'mid',  name:'左中拳', cue:'左拳快速向右横击，越过身体中线'},
+  {hand:'left', lane:'low',  name:'左下拳', cue:'左拳快速下压，低过腰线'},
+  {hand:'right',lane:'high', name:'右上拳', cue:'右拳快速上击，越过头顶高线'},
+  {hand:'right',lane:'mid',  name:'右中拳', cue:'右拳快速向左横击，越过身体中线'},
+  {hand:'right',lane:'low',  name:'右下拳', cue:'右拳快速下压，低过腰线'},
+];
+
+const SKILLS={
+  rupture:{
+    id:'rupture', name:'过载断层', short:'断层', timbre:'fracture_saw',
+    triggerLane:'high',
+    sequence:[              // 左上 - 右上 - 左中：顺手的上上横
+      {hand:'left', lane:'high'},
+      {hand:'right',lane:'high'},
+      {hand:'left', lane:'mid'},
+    ],
+    windowMs:5000,
+    effect:{type:'damage',value:72},
+    memory:'「别让清理进程读完你。」',
+  },
+  repair:{
+    id:'repair', name:'回声修复', short:'修复', timbre:'glass_bell',
+    triggerLane:'low',
+    sequence:[              // 左平 - 右平：两记平拳，最顺手
+      {hand:'left', lane:'mid'},
+      {hand:'right',lane:'mid'},
+    ],
+    windowMs:4200,
+    effect:{type:'heal',value:32},
+    memory:'「把掉线的那一段自己接回来。」',
+  },
+};
+let equippedSkills={A:'rupture', B:'repair'};
+function skillDefForSlot(slot){ return SKILLS[equippedSkills[slot]] || SKILLS.rupture; }
+function handLabel(hand){ return hand==='left'?'左':'右'; }
+function laneLabel(lane){ return lane==='high'?'上':lane==='low'?'下':'中'; }
+function moveLabel(m){ return handLabel(m.hand)+laneLabel(m.lane)+'拳'; }
+function triggerLabel(skill){ return skill.triggerLane==='high'?'双拳上击':'双拳下击'; }
+function fallbackTime(bar, step=0){ return (bar*4 + step/4) * (60000/BATTLE_BPM); }
+const FALLBACK_SKILL_EVENTS=[
+  {slot:'A',timeMs:fallbackTime(12),label:'SKILL_A_FALLBACK'},
+  {slot:'B',timeMs:fallbackTime(18),label:'SKILL_B_FALLBACK'},
+  {slot:'A',timeMs:fallbackTime(24),label:'SKILL_A_FALLBACK'},
+  {slot:'B',timeMs:fallbackTime(30),label:'SKILL_B_FALLBACK'},
+];
+let skillState={
+  nextEvent:0,
+  available:{},
+  active:null,
+  trigger:{left:null,right:null},
+  flash:null,
+  goldWash:0,
+};
+let skillTut={slotIndex:0,mode:'trigger',seqIndex:0,trigger:{left:null,right:null},flash:null};
+function startGetReady(){ phase='getready'; getReadyWall=performance.now(); if(saveData && !saveData.tutorialDone){ saveData.tutorialDone=true; writeSaveData(saveData); } }
+function startSkillTutorial(){
+  phase='skilltutorial';
+  skillTut={slotIndex:0,mode:'trigger',seqIndex:0,trigger:{left:null,right:null},flash:null};
+}
+function resetSkills(){
+  skillState={nextEvent:0,available:{},active:null,trigger:{left:null,right:null},flash:null,goldWash:0};
+}
+function skillEvents(){
+  return (midiSong && midiSong.triggerEvents && midiSong.triggerEvents.length) ? midiSong.triggerEvents : FALLBACK_SKILL_EVENTS;
+}
+function makeSkillAvailable(slot, now, ev){
+  const def=skillDefForSlot(slot);
+  skillState.goldWash=Math.max(skillState.goldWash,0.42);
+  pops.push({x:cv.width*0.50,y:cv.height*0.20,txt:def.short+' LINK',col:'--gold',t:now});
+  startSkillFromSlot(slot, now, ev);
+}
+function updateSkills(now, dt){
+  const events=skillEvents();
+  while(skillState.nextEvent<events.length && now>=events[skillState.nextEvent].timeMs){
+    const ev=events[skillState.nextEvent++];
+    makeSkillAvailable(ev.slot, now, ev);
+  }
+  for(const slot of Object.keys(skillState.available)){
+    if(now>skillState.available[slot].expires) delete skillState.available[slot];
+  }
+  if(skillState.active) playerHP=Math.max(playerHP,skillState.active.lockHP);
+  if(skillState.active && now>skillState.active.endT) resolveSkill(false, now);
+  if(skillState.flash && now-skillState.flash.t>900) skillState.flash=null;
+  if(skillState.goldWash>0) skillState.goldWash=Math.max(0,skillState.goldWash-dt/900);
+}
+function clearBallsForSkill(now){
+  for(const b of balls){
+    if(b.hit||b.missed) continue;
+    burst(ballX(b,now),laneY(b.lane),'--gold',18);
+  }
+  balls=[];
+}
+function startSkillFromSlot(slot, now, ev=null){
+  if(skillState.active) return false;
+  const def=skillDefForSlot(slot);
+  delete skillState.available[slot];
+  clearBallsForSkill(now);
+  skillState.active={slot,skill:def,index:0,startT:now,endT:now+def.windowMs,lockHP:playerHP};
+  skillState.trigger={left:null,right:null};
+  skillState.goldWash=1;
+  shake=Math.min(shake+14,22);
+  pops.push({x:cv.width/2,y:cv.height*0.42,txt:def.name,col:'--gold',t:now});
+  playSkillOpenCue(def);   // obvious rhythmic motif in this skill's timbre = "技能窗打开了"
+  return true;
+}
+function resolveSkill(ok, now){
+  const active=skillState.active;
+  if(!active) return;
+  const def=active.skill;
+  skillState.active=null;
+  if(ok){
+    playSkillSuccessSfx(def);
+    if(def.effect.type==='damage'){
+      enemyHP=Math.max(0,enemyHP-def.effect.value);
+      shake=Math.min(shake+20,28);
+      burst(SPAWNX()+cv.width*0.04,cv.height*0.50,'--gold',44);
+      pops.push({x:SPAWNX()-90,y:cv.height*0.40,txt:'-'+def.effect.value+' HP',col:'--gold',t:now});
+      if(enemyHP<=0){ enemyHP=0; endGame(true); }
+    }else if(def.effect.type==='heal'){
+      playerHP=Math.min(MAX_PLAYER_HP,playerHP+def.effect.value);
+      burst(HITX()-cv.width*0.05,cv.height*0.50,'--green',38);
+      pops.push({x:HITX()+90,y:cv.height*0.40,txt:'+'+def.effect.value+' HP',col:'--green',t:now});
+    }
+    pops.push({x:cv.width/2,y:cv.height*0.24,txt:'技能成功',col:'--gold',t:now});
+  }else{
+    pops.push({x:cv.width/2,y:cv.height*0.24,txt:'技能中断',col:'--red',t:now});
+  }
+}
+function handleActiveSkillPunch(hand,lane,now){
+  const active=skillState.active;
+  if(!active) return false;
+  const col=hand==='left'?'--blue':'--red', y=laneY(lane);
+  beams.push({y,col,t:now,hand,lane,reach:SPAWNX()});
+  burst(HITX(),y,col,18);
+  const expected=active.skill.sequence[active.index];
+  if(hand===expected.hand && lane===expected.lane){
+    active.index++;
+    skillState.flash={ok:true,t:now,lane:expected.lane};   // gold flash on the lane just cleared
+    playSkillStepSfx(active.index);
+    if(active.index>=active.skill.sequence.length) resolveSkill(true, now);
+  }else{
+    skillState.flash={ok:false,t:now,lane};                // wrong: brief red flash on that lane, no floating text
+  }
+  return true;
+}
+function trySkillGesture(hand,lane,now){
+  if(skillState.active || (lane!=='high' && lane!=='low')) return false;
+  skillState.trigger[hand]={lane,t:now};
+  const L=skillState.trigger.left, R=skillState.trigger.right;
+  if(!L||!R || now-L.t>800 || now-R.t>800 || Math.abs(L.t-R.t)>550 || L.lane!==R.lane) return false;
+  for(const slot of ['A','B']){
+    const avail=skillState.available[slot];
+    if(!avail) continue;
+    const def=skillDefForSlot(slot);
+    if(def.triggerLane===lane) return startSkillFromSlot(slot, now);
+  }
+  return false;
+}
+function handleSkillTutorialPunch(hand,lane,now){
+  const slot=['A','B'][skillTut.slotIndex], def=skillDefForSlot(slot);
+  const col=hand==='left'?'--blue':'--red', y=laneY(lane);
+  beams.push({y,col,t:now,hand,lane,reach:SPAWNX()});
+  burst(HITX(),y,col,16);
+  if(skillTut.mode==='trigger'){
+    skillTut.trigger[hand]={lane,t:now};
+    const L=skillTut.trigger.left, R=skillTut.trigger.right;
+    if(L&&R && now-L.t<=800 && now-R.t<=800 && Math.abs(L.t-R.t)<=550){
+      if(L.lane===def.triggerLane && R.lane===def.triggerLane){
+        skillTut.mode='sequence'; skillTut.seqIndex=0; skillTut.flash={ok:true,t:now,txt:'技能窗打开'};
+      }else{
+        skillTut.flash={ok:false,t:now,txt:'触发手势是 '+triggerLabel(def)};
+      }
+      skillTut.trigger={left:null,right:null};
+    }
+    return;
+  }
+  const expected=def.sequence[skillTut.seqIndex];
+  if(hand===expected.hand && lane===expected.lane){
+    skillTut.seqIndex++;
+    playSkillStepSfx(skillTut.seqIndex);
+    if(skillTut.seqIndex>=def.sequence.length){
+      playSkillSuccessSfx(def);
+      skillTut.slotIndex++;
+      if(skillTut.slotIndex>=2) startGetReady();
+      else skillTut={slotIndex:skillTut.slotIndex,mode:'trigger',seqIndex:0,trigger:{left:null,right:null},flash:{ok:true,t:now,txt:'下一个技能'}};
+    }else{
+      skillTut.flash={ok:true,t:now,txt:'OK'};
+    }
+  }else{
+    skillTut.flash={ok:false,t:now,txt:'现在要 '+moveLabel(expected)};
+  }
+}
+function enterGame(){
+  phase='game';
+  balls=[];particles=[];beams=[];pops=[];
+  score=0;combo=0;maxCombo=0;enemyHP=chapterMaxHP;playerHP=MAX_PLAYER_HP;
+  nextStep=0;nextClickBeat=0;gameOver=false;win=false;stats={perfect:0,good:0,miss:0};  // reset beat cursor too (else metronome drifts away each replay)
+  resetSkills();
+  if(actx) t0=actx.currentTime*1000+300;
+  stopAudioPlayback();
+  if(usingSong) startSong(); else startMidiSong();
+  hands.left=newHand(); hands.right=newHand();   // MUST reset: clock just jumped, stale lastFire/hist would swallow every punch
+  pops.push({x:cv.width/2, y:cv.height/2, txt:'开始！', col:'--gold', t:gameNow()});
+}
+function endGame(won){
+  gameOver=true; win=won; phase='gameover'; usingMidi=false;
+  if(won){ markCleared(saveData,currentChapter,score); writeSaveData(saveData); }   // persist progress + unlock next
+  hands.left.menu=null; hands.right.menu=null;
+}
+
+// ---- body-motion menu: both fists up / both fists down ----
+function checkDouble(now){
+  const L=hands.left.menu, R=hands.right.menu;
+  if(!L||!R) return null;
+  if(now-L.t>800 || now-R.t>800) return null;       // both punches recent
+  if(Math.abs(L.t-R.t)>550) return null;            // roughly together
+  if(L.lane==='high' && R.lane==='high') return 'up';
+  if(L.lane==='low'  && R.lane==='low')  return 'down';
+  return null;
+}
+function menuPunch(hand, lane, now){
+  const col=hand==='left'?'--blue':'--red', y=laneY(lane);
+  beams.push({y, col, t:now, hand, lane, reach:SPAWNX()});   // feedback that the fist registered
+  burst(HITX(), y, col, 14);
+  hands[hand].menu={lane, t:now};
+  const act=checkDouble(now);
+  if(act){ hands.left.menu=null; hands.right.menu=null; doMenu(act); }
+}
+function doMenu(act){
+  if(phase==='intro'){
+    if(act==='up'){ phase='tutorial'; tutStep=0; tutReps=0; tutFlash=null; tutHoldUntil=0; }   // 双拳上击 = 进入教学
+    else { startGetReady(); }                                                   // 双拳下击 = 跳过
+  } else if(phase==='gameover'){
+    if(act==='up') enterGame();                                                 // 双拳上击 = 再来一局
+    else if(act==='down'){ stopAudioPlayback(); phase='chapterselect'; }        // 双拳下击 = 回选关
+  }
+}
+
+// looping chart: one entry per beat (null=rest). lane:high/mid/low, hand:left/right
+// each slot = cfg.attackGap ms. Spaced so same-hand (same-color) balls are >=3 slots (>2s) apart.
+const CHART=[
+  {hand:'right',lane:'mid'},  null, {hand:'left',lane:'high'}, null,
+  {hand:'right',lane:'low'},  null, {hand:'left',lane:'mid'},  {hand:'right',lane:'high'},
+  null, {hand:'left',lane:'low'}, null, {hand:'right',lane:'mid'},
+  {hand:'left',lane:'high'},  null, {hand:'right',lane:'low'}, null,
+];
+
+function resetGame(){
+  balls=[];particles=[];beams=[];pops=[];
+  score=0;combo=0;maxCombo=0;enemyHP=MAX_ENEMY_HP;playerHP=MAX_PLAYER_HP;shake=0;
+  nextStep=0;gameOver=false;win=false;
+  stats={perfect:0,good:0,miss:0};
+  nextClickBeat=0;
+  resetSkills();
+  hands.left=newHand(); hands.right=newHand();   // fully reset detection/history
+}
+
+function spawnDue(now, muted=false){
+  if (gameOver) return;
+  const beat = cfg.attackGap;   // attack slot spacing (1.5 beats → locked to the music grid)
+  const leadIn = 60000/cfg.bpm*4; // count-in = 4 beats, so notes align to the BGM downbeat grid
+  // spawn any steps whose tHit-approach has arrived
+  while (true){
+    const tHit = leadIn + nextStep*beat;
+    if (now < tHit - cfg.approach) break;
+    const step = CHART[nextStep % CHART.length];
+    if (step && !muted){
+      balls.push({ hand:step.hand, lane:step.lane, tHit, hit:false, missed:false });
+    }
+    nextStep++;
+    if (nextStep > 100000) break; // safety
+  }
+}
+
+function laneY(lane){
+  const top=cv.height*0.30, mid=cv.height*0.50, bot=cv.height*0.70;
+  return lane==='high'?top:lane==='low'?bot:mid;
+}
+const HITX = ()=>cv.height*0.28;     // hit line x (player side, left)
+const SPAWNX = ()=>cv.width*0.92;    // enemy side (right)
+function ballX(b, now){ const prog=(now-(b.tHit-cfg.approach))/cfg.approach; return SPAWNX()+(HITX()-SPAWNX())*prog; }
+
+function registerPunch(hand, lane, now, hitT){
+  const col = hand==='left'?'--blue':'--red';
+  const y = laneY(lane);
+  shake=Math.min(shake+6,16);
+  if (phase==='getready'||phase==='title'||phase==='chapterselect') return;   // menu screens use mouse/keys
+  if (phase==='intro' || phase==='gameover'){ menuPunch(hand, lane, now); return; }
+  if (phase==='practice'){
+    beams.push({ y, col, t:now, hand, lane, reach:SPAWNX() });
+    burst(HITX(), y, col, 18);
+    const ln = lane==='high'?'高 HIGH':lane==='low'?'低 LOW':'中 MID';
+    pops.push({x:HITX()+120, y:y-44, txt:(hand==='left'?'左 L':'右 R')+' · '+ln, col, t:now});
+    return;
+  }
+  if (phase==='tutorial'){
+    if(tutHoldUntil) return;                    // during the 完成 celebration, ignore input
+    const g=TUTORIAL[tutStep];
+    beams.push({ y, col, t:now, hand, lane, reach:SPAWNX() });
+    burst(HITX(), y, col, 16);
+    if(hand===g.hand && lane===g.lane){
+      tutReps++;
+      if(tutReps>=TUT_NEED){
+        tutFlash={ok:true, t:now, txt:'成功！完成 ✓'};
+        tutHoldUntil=now+1100;                  // hold the success feedback, THEN move on (set in update)
+      }else{
+        tutFlash={ok:true, t:now, txt:'很好！再来一次 ('+tutReps+'/'+TUT_NEED+')'};
+      }
+    } else {
+      tutFlash={ok:false, t:now, txt:'不是这个 — 现在要：'+g.name};
+    }
+    return;
+  }
+  if (phase==='skilltutorial'){
+    handleSkillTutorialPunch(hand,lane,now);
+    return;
+  }
+  if (phase==='game' && skillState.active){
+    handleActiveSkillPunch(hand,lane,now);
+    return;
+  }
+  if (phase==='game' && trySkillGesture(hand,lane,now)) return;
+  // GAME: the column shoots out and is BLOCKED by the FRONTMOST still-approaching ball
+  // in this lane+hand; that ball explodes. Only the closest one counts.
+  let target=null, tx=Infinity;
+  for(const b of balls){
+    if(b.hit||b.missed || b.lane!==lane || b.hand!==hand) continue;
+    const bx=ballX(b,now);
+    if(bx < HITX()-20) continue;                 // already crossed the line -> not hittable
+    if(bx < tx){ tx=bx; target=b; }              // frontmost = smallest x (closest to hit line)
+  }
+  const reach = target ? tx : HITX()+(SPAWNX()-HITX())*0.33;   // whiff = short stub
+  beams.push({ y, col, t:now, hand, lane, reach });
+  if(target){
+    target.hit=true; target.hitAt=now;
+    burst(tx, y, col, 24);
+    const closeness=1-Math.max(0,Math.min(1,(tx-HITX())/(SPAWNX()-HITX())));  // 1=on the line
+    const perfect=closeness>0.78;
+    score += perfect?300:160; enemyHP -= perfect?3:2;
+    if(perfect) stats.perfect++; else stats.good++;
+    pops.push({x:tx, y:y-30, txt:perfect?'PERFECT':'HIT', col:perfect?'--gold':'--green', t:now});
+    combo++; maxCombo=Math.max(maxCombo,combo);
+    shake=Math.min(shake+9,16);
+    if(enemyHP<=0){ enemyHP=0; endGame(true); }
+  } else { combo=0; }                            // nothing in lane to hit = whiff
+}
+
+function burst(x,y,colVar,n){
+  const c=cssCol(colVar);
+  for(let i=0;i<n;i++){
+    const a=Math.random()*Math.PI*2, sp=2+Math.random()*6;
+    particles.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:1,col:c,r:2+Math.random()*3});
+  }
+}
+
+/* ============================================================
+   MAIN LOOP
+   ============================================================ */
+let fps=0, fpsT=0, fpsN=0;
+
+function detectPose(now){
+  if (!pose || video.readyState<2) return;
+  if (video.currentTime===lastVideoT) return;
+  lastVideoT=video.currentTime;
+  const t=performance.now();
+  try{ det = pose.detectForVideo(video, t); }catch(e){ return; }
+  detLatency = performance.now()-t;
+  if (!det || !det.landmarks || !det.landmarks.length){ hands.left.vis=hands.right.vis=0; return; }
+  const lm=det.landmarks[0];
+  const lsho=lm[L.lsho], rsho=lm[L.rsho];
+  const shoY=(lsho.y+rsho.y)/2, hipY=(lm[L.lhip].y+lm[L.rhip].y)/2;
+  const body={ cx:(lsho.x+rsho.x)/2, shoY, hipY,
+               torso:Math.max(0.05, hipY-shoY),
+               shoW:Math.max(0.05, Math.hypot(lsho.x-rsho.x, lsho.y-rsho.y)) };
+  bodyRef=body;
+  processHand('left',  lm[L.lwri], lsho, body, now);
+  processHand('right', lm[L.rwri], rsho, body, now);
+}
+
+let lastDetT=null, bodyRef=null;
+// Classify a punch by its SWING TRAJECTORY (not instantaneous position):
+//   net vertical move over the last trajWindow ms => high / low / mid,
+//   plus an optional centerline-crossing gate for horizontal (mid) punches.
+// Classify a completed swing from its START point to its END (apex) point.
+function classifyPts(side, sx, sy, ex, ey, body){
+  const vy = yy => (yy-body.shoY)/body.torso;        // 0=shoulders, 1=hips
+  const vx = xx => ((cfg.mirror?1-xx:xx)-(cfg.mirror?1-body.cx:body.cx))/body.shoW; // view: + = right of center
+  const vyS=vy(sy), vyE=vy(ey), hxE=vx(ex);
+  // START only needs to sit within the vertical band (between the high & low lines)
+  const startMid = vyS>cfg.lineHigh && vyS<cfg.lineLow;
+  // lane = whichever line the END (apex) crossed (vertical wins over horizontal)
+  let lane=null;
+  if(vyE<=cfg.lineHigh) lane='high';
+  else if(vyE>=cfg.lineLow) lane='low';
+  else if(side==='left'  && hxE>=cfg.lineLeft)  lane='mid';  // left hand reached its line (user-right)
+  else if(side==='right' && hxE<=-cfg.lineRight) lane='mid';  // right hand reached its line (user-left)
+  const valid = cfg.requireCross ? (startMid && lane!==null) : true;
+  return { lane:lane||'mid', valid, startMid, crossed:lane!==null, vyS, vyE, hxE };
+}
+// Punch activation in "shoulder-widths per second" — scale/distance independent.
+// Two complementary signals so any punch style registers:
+//   vImg = wrist speed in the image plane (visible swings / hooks)
+//   vFwd = forward reach speed toward the camera via z (straight jabs)
+// 'auto' triggers on whichever is larger.
+function processHand(side, w, sho, body, now){
+  const h=hands[side];
+  h.vis = w.visibility ?? 1;
+  const dtms=(h._pt==null)?33:Math.min(100,Math.max(8, now-h._pt)); h._pt=now;
+  const dt=dtms/1000;
+  // 1) One Euro filter the raw coords: heavy smoothing when still (no jitter),
+  //    light smoothing when moving fast (no lag on a real punch; meter drops back fast)
+  h.fx =oneEuro(h.oe.x,  w.x,  dt);
+  h.fy =oneEuro(h.oe.y,  w.y,  dt);
+  h.fz =oneEuro(h.oe.z,  w.z,  dt);
+  h.fsz=oneEuro(h.oe.sz, sho.z,dt);
+  h.wx=h.fx; h.wy=h.fy;
+  const reachZ=(h.fsz-h.fz)/body.shoW;               // + = wrist ahead of shoulder (toward cam)
+  // 2) velocity over a short time window from the FILTERED positions
+  h.hist.push({t:now,x:h.fx,y:h.fy,r:reachZ});
+  while(h.hist.length>2 && now-h.hist[0].t>260) h.hist.shift();
+  let ref=h.hist[0];
+  for(let i=h.hist.length-1;i>=0;i--){ if(now-h.hist[i].t>=cfg.velWindow){ ref=h.hist[i]; break; } }
+  const intv=Math.max(cfg.velWindow*0.5, now-ref.t);
+  const vImg=Math.hypot(h.fx-ref.x,h.fy-ref.y)/body.shoW/intv*1000;  // shoulder-widths / sec
+  const vFwd=Math.max(0,(reachZ-ref.r))/intv*1000;
+  const inst = cfg.mode==='image' ? vImg : cfg.mode==='depth' ? vFwd : Math.max(vImg,vFwd*0.8);
+  h.act += (inst-h.act)*0.6;                          // tiny anti-flicker smoothing only
+  h.reachZ=reachZ; h.vImg=vImg; h.vFwd=vFwd;
+  // 3) a trigger starts a swing capture; we classify at the swing's APEX (the farthest
+  //    point the hand reaches), so "did it cross the line" matches what you actually see.
+  if(h.pending){
+    const d=Math.hypot(h.fx-h.pending.sx, h.fy-h.pending.sy);
+    if(d>h.pending.maxD){ h.pending.maxD=d; h.pending.ex=h.fx; h.pending.ey=h.fy; }  // track apex
+    if(h.act<cfg.resetLevel || now-h.pending.t0>250){              // swing ended (or timed out)
+      const p=h.pending; h.pending=null;
+      const cls=classifyPts(side, p.sx,p.sy, p.ex,p.ey, body);
+      h.lane=cls.lane; h.lastCls=cls;
+      if(started && !paused){
+        if(cls.valid) registerPunch(side, cls.lane, now, p.t0);   // judge timing = trigger (punch) time
+        else if(phase==='game'||phase==='tutorial') pops.push({x:HITX()+90, y:laneY(cls.lane), txt:(cls.startMid?'× 未过线':'× 起点不在高低之间'), col:'--dim', t:now});
+      }
+    }
+  }
+  let fired=updatePunch(h.punch, h.act, cfg);
+  if(fired){ if(now-h.lastFire<cfg.minGap) fired=false; else h.lastFire=now; }
+  if(fired && !paused && !h.pending){            // detect swings in every phase (incl. gameover, for the replay gesture)
+    let s=h.hist[0];                                              // START = filtered pos ~trajWindow ago
+    for(let i=h.hist.length-1;i>=0;i--){ if(now-h.hist[i].t>=cfg.trajWindow){ s=h.hist[i]; break; } }
+    h.pending={ t0:now, sx:s.x, sy:s.y, ex:h.fx, ey:h.fy, maxD:0 };
+  }
+}
+
+function update(now, dt){
+  if (paused) { lastDetT=now; return; }   // game logic is gated by phase below; cleanup still runs in gameover
+  if (phase==='tutorial' && tutHoldUntil && now>=tutHoldUntil){   // celebration done → next move
+    tutHoldUntil=0; tutReps=0; tutStep++;
+    if(tutStep>=TUTORIAL.length) startSkillTutorial();
+  }
+  if (phase==='getready'){
+    if(performance.now()-getReadyWall>=6000) enterGame();  // hand off with a FRESH clock;
+    // skip game logic this frame — `now` is still the stale pre-reset timestamp
+  } else if (phase==='game'){
+    updateSkills(now,dt);
+    const attacksMuted=!!skillState.active;
+    spawnDue(now, attacksMuted);
+    if(!attacksMuted){
+      for(const b of balls){                        // a ball reaching the hit line unhit = MISS
+        if(!b.hit && !b.missed && ballX(b,now) <= HITX()){
+          b.missed=true; combo=0; stats.miss++;
+          playerHP-=6; shake=Math.min(shake+6,16);
+          pops.push({x:HITX(),y:laneY(b.lane),txt:'MISS',col:'--red',t:now});
+          if(playerHP<=0){playerHP=0;endGame(false);}
+        }
+      }
+    }
+    // hit balls vanish at once (explosion = particles); missed balls fly off then despawn
+    balls=balls.filter(b=> b.hit ? now<(b.hitAt||now)+140 : ballX(b,now) > HITX()-160 );
+  }
+  for(const p of particles){p.x+=p.vx;p.y+=p.vy;p.vy+=0.12;p.vx*=0.97;p.life-=dt/650;}
+  particles=particles.filter(p=>p.life>0);
+  beams=beams.filter(b=>now-b.t<260);
+  pops=pops.filter(p=>now-p.t<900);
+  if(tutFlash && now-tutFlash.t>1100) tutFlash=null;
+  if(shake>0) shake*=0.86;
+  lastDetT=now;
+}
+
+/* ============================================================
+   RENDER
+   ============================================================ */
+function cssCol(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+function glowCircle(x,y,r,col,blur){
+  ctx.save();ctx.globalCompositeOperation='lighter';
+  ctx.shadowColor=col;ctx.shadowBlur=blur;
+  ctx.fillStyle=col;ctx.beginPath();ctx.arc(x,y,r,0,7);ctx.fill();
+  ctx.restore();
+}
+// enemy = a writhing, irregular tangle of wavy rings (violet — distinct from red/blue hands)
+function drawEnemy(cx,cy,now,hp){
+  const col='#a472ff', frantic=1+(1-(hp??100)/100)*1.4;   // more agitated as it loses HP
+  ctx.save();ctx.globalCompositeOperation='lighter';
+  ctx.strokeStyle=col;ctx.shadowColor=col;ctx.shadowBlur=22;ctx.lineWidth=2.5;
+  for(let ring=0;ring<3;ring++){
+    const base=26+ring*9, ph=now/(260+ring*110)+ring*1.9;
+    ctx.globalAlpha=0.5-ring*0.12;
+    ctx.beginPath();
+    for(let a=0;a<=6.5;a+=0.18){
+      const r=base + 9*frantic*Math.sin(a*3+ph) + 5*Math.sin(a*5-ph*1.3);
+      const px=cx+Math.cos(a)*r, py=cy+Math.sin(a)*r;
+      a===0?ctx.moveTo(px,py):ctx.lineTo(px,py);
+    }
+    ctx.closePath();ctx.stroke();
+  }
+  ctx.globalAlpha=0.9;ctx.fillStyle='#fff';ctx.shadowBlur=14;
+  ctx.beginPath();ctx.arc(cx,cy,5,0,7);ctx.fill();
+  ctx.restore();
+}
+
+function render(now){
+  const W=cv.width,H=cv.height;
+  let sx=0,sy=0; if(shake>1){sx=(Math.random()-.5)*shake;sy=(Math.random()-.5)*shake;}
+  ctx.setTransform(1,0,0,1,sx,sy);
+  // bg
+  ctx.fillStyle='#06070f';ctx.fillRect(-20,-20,W+40,H+40);
+  if(skillState.goldWash>0){
+    ctx.save();ctx.globalCompositeOperation='lighter';
+    ctx.fillStyle=`rgba(255,210,58,${0.14*skillState.goldWash})`;
+    ctx.fillRect(-20,-20,W+40,H+40);
+    ctx.restore();
+  }
+  // lane tracks
+  for(const lane of LANES){
+    const y=laneY(lane);
+    ctx.strokeStyle='rgba(120,140,210,.12)';ctx.lineWidth=2;
+    ctx.beginPath();ctx.moveTo(HITX(),y);ctx.lineTo(SPAWNX(),y);ctx.stroke();
+  }
+  // hit line
+  ctx.save();ctx.globalCompositeOperation='lighter';
+  const grd=ctx.createLinearGradient(HITX()-30,0,HITX()+30,0);
+  grd.addColorStop(0,'rgba(120,180,255,0)');grd.addColorStop(1,'rgba(120,180,255,.5)');
+  ctx.fillStyle=grd;ctx.fillRect(HITX()-30,H*0.22,60,H*0.56);ctx.restore();
+  ctx.strokeStyle='rgba(160,200,255,.55)';ctx.lineWidth=3;
+  ctx.beginPath();ctx.moveTo(HITX(),H*0.22);ctx.lineTo(HITX(),H*0.78);ctx.stroke();
+
+  if(phase==='practice' || phase==='skilltutorial') drawLaneBands(now);
+
+  // enemy = irregular wavy tangle (right) · player = white orb (left)
+  if(phase==='intro'||phase==='getready'||phase==='game'||phase==='gameover'){   // arena only in battle-ish phases
+    drawEnemy(SPAWNX()+W*0.04, H*0.5, now, enemyHP/chapterMaxHP*100);
+    glowCircle(HITX()-W*0.05, H*0.5, 26+Math.sin(now/400)*3, '#ffffff', 30);
+    glowCircle(HITX()-W*0.05, H*0.5, 10, '#ffffff', 14);
+  }
+
+  // beams (player light columns) — horizontal beam is BLOCKED at the ball it hits
+  for(const bm of beams){
+    const k=(now-bm.t)/260, a=Math.max(0,1-k), col=cssCol(bm.col);
+    const hh=64*(2-a);                          // grows as it fades
+    const reach=(bm.reach!=null?bm.reach:SPAWNX());
+    ctx.save();ctx.globalCompositeOperation='lighter';
+    ctx.shadowColor=col;ctx.shadowBlur=60;ctx.fillStyle=col;
+    ctx.globalAlpha=a;                           // bright vertical column, player side
+    ctx.fillRect(HITX()-15,bm.y-hh/2,30,hh);
+    ctx.globalAlpha=a*0.8;                        // horizontal beam, stops at the ball (reach)
+    const len=Math.max(0,(reach-HITX()))*Math.min(1,k*3.2);
+    ctx.fillRect(HITX(),bm.y-16,len,32);
+    ctx.globalAlpha=a;ctx.fillStyle='#fff';ctx.shadowBlur=26; // white core
+    ctx.fillRect(HITX()-5,bm.y-hh/2,10,hh);
+    ctx.restore();
+  }
+
+  // balls
+  for(const b of balls){
+    if(b.hit||b.missed) continue;
+    const prog=(now-(b.tHit-cfg.approach))/cfg.approach; // 0..1
+    const x=SPAWNX()+(HITX()-SPAWNX())*prog, y=laneY(b.lane);
+    const col=cssCol(b.hand==='left'?'--blue':'--red');
+    const near=1-Math.min(1,Math.abs(now+cfg.calibration-b.tHit)/cfg.approach);
+    glowCircle(x,y,18+near*8,col,20+near*30);
+    glowCircle(x,y,7,'#fff',10);
+    // approach ring
+    ctx.save();ctx.globalCompositeOperation='lighter';ctx.strokeStyle=col;ctx.globalAlpha=.5;
+    ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y,Math.max(2,18+(1-prog)*40),0,7);ctx.stroke();ctx.restore();
+  }
+
+  // particles
+  ctx.save();ctx.globalCompositeOperation='lighter';
+  for(const p of particles){ctx.globalAlpha=Math.max(0,p.life);ctx.shadowColor=p.col;ctx.shadowBlur=12;
+    ctx.fillStyle=p.col;ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,7);ctx.fill();}
+  ctx.restore();
+
+  // pops (judgment text)
+  for(const p of pops){const a=1-(now-p.t)/800;ctx.save();ctx.globalAlpha=a;
+    ctx.fillStyle=cssCol(p.col);ctx.font='bold 26px Segoe UI';ctx.textAlign='center';
+    ctx.fillText(p.txt,p.x,p.y-40-(now-p.t)*0.03);ctx.restore();}
+
+  if(skillState.active) drawSkillWindow(now);
+
+  // ---- HUD / overlays per phase ----
+  if(phase==='title') drawTitle(now);
+  else if(phase==='chapterselect') drawChapterSelect(now);
+  else if(phase==='practice') drawTester(now);
+  else if(phase==='tutorial') drawTutorial(now);
+  else if(phase==='skilltutorial') drawSkillTutorial(now);
+  else if(phase==='getready') drawGetReady();
+  else if(phase==='intro') drawIntro(now);
+  else hud(now);   // game + gameover
+  // ---- debug cam: shown in intro/tutorial/practice/gameover; hidden in title/chapterselect/game/getready unless 调试 ----
+  if(cfg.debug || (phase!=='game' && phase!=='getready' && phase!=='title' && phase!=='chapterselect')) drawDebug();
+  ctx.setTransform(1,0,0,1,0,0);
+  if(phase==='gameover') drawEnd(now);
+}
+
+function bar(x,y,w,h,frac,col,label){
+  ctx.fillStyle='rgba(255,255,255,.08)';ctx.fillRect(x,y,w,h);
+  ctx.save();ctx.globalCompositeOperation='lighter';ctx.shadowColor=col;ctx.shadowBlur=14;
+  ctx.fillStyle=col;ctx.fillRect(x,y,w*Math.max(0,frac),h);ctx.restore();
+  ctx.fillStyle='#cfd6f5';ctx.font='12px Segoe UI';ctx.textAlign='left';ctx.fillText(label,x,y-6);
+}
+function hud(now){
+  const W=cv.width;
+  drawSkillHud(now);
+  bar(W*0.52,104,W*0.40,16,enemyHP/chapterMaxHP,cssCol('--red'),'ENEMY');
+  bar(28,104,W*0.30,16,playerHP/MAX_PLAYER_HP,cssCol('--blue'),'YOU');
+  ctx.fillStyle='#fff';ctx.textAlign='left';
+  ctx.font='bold 30px Segoe UI';ctx.fillText(score.toString().padStart(6,'0'),28,160);
+  if(combo>1){ctx.fillStyle=cssCol('--gold');ctx.font='bold 40px Segoe UI';
+    ctx.fillText(combo+' COMBO',28,206);}
+  // diagnostics
+  ctx.fillStyle='var(--dim)';ctx.fillStyle='#8a93b8';ctx.font='12px Segoe UI';ctx.textAlign='right';
+  ctx.fillText(`FPS ${fps|0} · 检测 ${detLatency.toFixed(0)}ms · P${stats.perfect}/G${stats.good}/M${stats.miss}`,cv.width-16,cv.height-14);
+}
+
+function meter(x,y,w,h,frac,thr,col,label,valTxt,live){
+  ctx.save();
+  ctx.fillStyle='rgba(255,255,255,.07)';ctx.fillRect(x,y,w,h);
+  const f=Math.max(0,Math.min(1,frac));
+  ctx.globalCompositeOperation='lighter';ctx.shadowColor=col;ctx.shadowBlur=live?26:14;
+  ctx.fillStyle=col;ctx.fillRect(x,y+h*(1-f),w,h*f);
+  ctx.restore();
+  const ty=y+h*(1-Math.max(0,Math.min(1,thr)));      // threshold (trigger) line
+  ctx.strokeStyle='#ffd23a';ctx.lineWidth=2;ctx.setLineDash([7,4]);
+  ctx.beginPath();ctx.moveTo(x-8,ty);ctx.lineTo(x+w+8,ty);ctx.stroke();ctx.setLineDash([]);
+  ctx.fillStyle='#cfd6f5';ctx.font='14px Segoe UI';ctx.textAlign='center';
+  ctx.fillText(label,x+w/2,y+h+20);
+  ctx.fillStyle=col;ctx.font='bold 16px Consolas,monospace';
+  ctx.fillText(valTxt,x+w/2,y-10);
+}
+function drawLaneBands(now){
+  const W=cv.width,H=cv.height,x0=HITX()-40,bh=H*0.18;
+  const lanes=[['high','高 HIGH',0.30],['mid','中 MID',0.50],['low','低 LOW',0.70]];
+  for(const [ln,label,fy] of lanes){
+    const y=H*fy;
+    let hot=0; for(const b of beams){ if(b.lane===ln) hot=Math.max(hot,1-(now-b.t)/260); }
+    ctx.save();
+    ctx.fillStyle='rgba(120,140,210,.06)';ctx.fillRect(x0,y-bh/2,W-x0,bh);
+    if(hot>0){ ctx.globalCompositeOperation='lighter';ctx.globalAlpha=hot*0.4;
+      ctx.fillStyle=cssCol('--gold');ctx.fillRect(x0,y-bh/2,W-x0,bh); }
+    ctx.restore();
+    ctx.strokeStyle='rgba(120,140,210,.18)';ctx.setLineDash([4,6]);
+    ctx.beginPath();ctx.moveTo(x0,y-bh/2);ctx.lineTo(W,y-bh/2);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(x0,y+bh/2);ctx.lineTo(W,y+bh/2);ctx.stroke();ctx.setLineDash([]);
+    ctx.fillStyle='#9fb0e8';ctx.font='bold 15px Segoe UI';ctx.textAlign='left';
+    ctx.fillText(label,x0+6,y-bh/2+18);
+  }
+}
+function drawTester(now){
+  const W=cv.width,H=cv.height;
+  ctx.textAlign='left';
+  ctx.fillStyle='#9fb0e8';ctx.font='bold 20px Segoe UI';
+  ctx.fillText('判定测试 — 出拳就该亮出对应颜色光柱',28,40);
+  ctx.fillStyle='#8a93b8';ctx.font='13px Segoe UI';
+  ctx.fillText('柱子超过黄色虚线(阈值)即触发。触发不了→把灵敏度调低；乱触发→调高。',28,62);
+  const scale=Math.max(cfg.triggerLevel*1.7,4);       // so the dashed line sits ~60% up
+  const mw=50,mh=H*0.44,my=H*0.30,cx=W*0.5;
+  const fired=s=>hands[s].punch.state==='cooldown';
+  meter(cx-74,my,mw,mh, hands.left.act/scale,  cfg.triggerLevel/scale, cssCol('--blue'),'左手 L',hands.left.act.toFixed(1),fired('left'));
+  meter(cx+24,my,mw,mh, hands.right.act/scale, cfg.triggerLevel/scale, cssCol('--red'), '右手 R',hands.right.act.toFixed(1),fired('right'));
+  ctx.fillStyle='#8a93b8';ctx.font='12px Segoe UI';ctx.textAlign='right';
+  ctx.fillText(`FPS ${fps|0} · 检测 ${detLatency.toFixed(0)}ms · 信号:${cfg.mode} (img ${hands.left.vImg.toFixed(1)}/${hands.right.vImg.toFixed(1)} · z ${hands.left.vFwd.toFixed(1)}/${hands.right.vFwd.toFixed(1)})`,W-16,H-14);
+}
+function drawTutorial(now){
+  const W=cv.width,H=cv.height,g=TUTORIAL[tutStep],col=cssCol(g.hand==='left'?'--blue':'--red');
+  ctx.textAlign='center';
+  ctx.fillStyle='#9fb0e8';ctx.font='bold 24px Segoe UI';
+  ctx.fillText('操作教学', W/2, 40);
+  ctx.fillStyle='#8a93b8';ctx.font='14px Segoe UI';
+  ctx.fillText('基础动作 '+(tutStep+1)+' / '+TUTORIAL.length, W/2, 64);
+  // colored move name + plain description (matches the cue style you wanted)
+  ctx.fillStyle=col;ctx.font='bold 48px Segoe UI';
+  ctx.fillText(g.name, W/2, H*0.30);
+  ctx.fillStyle='#e8ecff';ctx.font='22px Segoe UI';
+  ctx.fillText(g.cue, W/2, H*0.30+42);
+  // rep dots (need TUT_NEED)
+  for(let i=0;i<TUT_NEED;i++){
+    ctx.beginPath();ctx.arc(W/2-14+i*28, H*0.30+78, 8, 0, 7);
+    ctx.fillStyle=i<tutReps?col:'rgba(255,255,255,.18)';ctx.fill();
+  }
+  // feedback flash
+  if(tutFlash){
+    ctx.globalAlpha=Math.max(0,1-(now-tutFlash.t)/1100);
+    ctx.fillStyle=cssCol(tutFlash.ok?'--green':'--red');ctx.font='bold 30px Segoe UI';
+    ctx.fillText(tutFlash.txt, W/2, H*0.60);
+    ctx.globalAlpha=1;
+  }
+  ctx.fillStyle='#8a93b8';ctx.font='13px Segoe UI';
+  ctx.fillText('对着右下角画面里的「你 + 判定线」做动作 · 成功两次进入下一个', W/2, H-16);
+}
+function drawSkillTutorial(now){
+  const W=cv.width,H=cv.height,slot=['A','B'][skillTut.slotIndex],def=skillDefForSlot(slot);
+  const seq=def.sequence, expected=seq[Math.min(skillTut.seqIndex,seq.length-1)];
+  const col=cssCol(expected.hand==='left'?'--blue':'--red');
+  ctx.textAlign='center';
+  ctx.fillStyle='#9fb0e8';ctx.font='bold 24px Segoe UI';
+  ctx.fillText('技能教学', W/2, 40);
+  ctx.fillStyle='#8a93b8';ctx.font='14px Segoe UI';
+  ctx.fillText('技能槽 '+slot+' / 2 · MIDI 触发轨到点后会点亮这个槽', W/2, 64);
+  ctx.fillStyle=cssCol('--gold');ctx.font='bold 46px Segoe UI';
+  ctx.fillText(def.name, W/2, H*0.26);
+  ctx.fillStyle='#e8ecff';ctx.font='22px Segoe UI';
+  if(skillTut.mode==='trigger'){
+    ctx.fillText(triggerLabel(def)+' 打开技能窗', W/2, H*0.26+42);
+  }else{
+    ctx.fillText('照顺序完成：'+moveLabel(expected), W/2, H*0.26+42);
+  }
+  const startX=W/2-(seq.length-1)*44/2;
+  for(let i=0;i<seq.length;i++){
+    const m=seq[i], c=cssCol(m.hand==='left'?'--blue':'--red');
+    ctx.beginPath();ctx.arc(startX+i*44,H*0.26+86,13,0,7);
+    ctx.fillStyle=i<skillTut.seqIndex?cssCol('--green'):i===skillTut.seqIndex&&skillTut.mode==='sequence'?c:'rgba(255,255,255,.16)';
+    ctx.fill();
+    ctx.fillStyle='#06070f';ctx.font='bold 12px Segoe UI';
+    ctx.fillText(laneLabel(m.lane),startX+i*44,H*0.26+90);
+  }
+  if(skillTut.mode==='sequence'){
+    laneGlow(expected.lane, col, 0.6+0.25*Math.sin(now/110), 60);
+  }
+  if(skillTut.flash){
+    ctx.globalAlpha=Math.max(0,1-(now-skillTut.flash.t)/900);
+    ctx.fillStyle=cssCol(skillTut.flash.ok?'--green':'--red');ctx.font='bold 30px Segoe UI';
+    ctx.fillText(skillTut.flash.txt, W/2, H*0.62);
+    ctx.globalAlpha=1;
+  }
+  ctx.fillStyle='#8a93b8';ctx.font='13px Segoe UI';
+  ctx.fillText('学完两个技能后进入战斗：技能轨点亮后，用对应双拳手势触发', W/2, H-16);
+}
+// a clean horizontal neon glow filling one lane (the synced skill prompt)
+function laneGlow(lane, col, alpha, half){
+  const y=laneY(lane), x0=HITX()-40, w=cv.width-x0; alpha=Math.max(0,Math.min(1,alpha));
+  ctx.save();ctx.globalCompositeOperation='lighter';
+  const g=ctx.createLinearGradient(0,y-half,0,y+half);
+  g.addColorStop(0,'rgba(0,0,0,0)');g.addColorStop(0.5,col);g.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.globalAlpha=alpha*0.55;ctx.fillStyle=g;ctx.fillRect(x0,y-half,w,half*2);
+  ctx.globalAlpha=alpha;ctx.shadowColor=col;ctx.shadowBlur=24;ctx.fillStyle=col;ctx.fillRect(x0,y-2.5,w,5);
+  ctx.restore();
+}
+function drawSkillWindow(now){
+  const active=skillState.active, def=active.skill, seq=def.sequence;
+  const idx=Math.min(active.index,seq.length-1), expected=seq[idx];
+  const col=cssCol(expected.hand==='left'?'--blue':'--red');
+  const W=cv.width,H=cv.height,remain=Math.max(0,(active.endT-now)/def.windowMs);
+  // subtle gold top/bottom edge — NOT a full-screen wash
+  ctx.save();ctx.globalCompositeOperation='lighter';
+  const vg=ctx.createLinearGradient(0,0,0,H);
+  vg.addColorStop(0,'rgba(255,210,58,.10)');vg.addColorStop(0.22,'rgba(255,210,58,0)');
+  vg.addColorStop(0.78,'rgba(255,210,58,0)');vg.addColorStop(1,'rgba(255,210,58,.10)');
+  ctx.fillStyle=vg;ctx.fillRect(0,0,W,H);ctx.restore();
+  // the lane you just cleared flashes GOLD (success); the current target lane glows its hand color = the prompt
+  const fl=skillState.flash;
+  if(fl && fl.ok && fl.lane && now-fl.t<300) laneGlow(fl.lane, cssCol('--gold'), 1-(now-fl.t)/300, 66);
+  laneGlow(expected.lane, col, 0.55+0.28*Math.sin(now/110), 60);
+  // bottom cue strip: name + step dots + window timer (text lives at the bottom, no floating mid-screen words)
+  ctx.textAlign='center';
+  ctx.fillStyle=cssCol('--gold');ctx.font='bold 22px Segoe UI';
+  ctx.fillText(def.name+' — 打亮起的那条轨道', W/2, H-78);
+  const startX=W/2-(seq.length-1)*36/2;
+  for(let i=0;i<seq.length;i++){
+    const m=seq[i], c=cssCol(m.hand==='left'?'--blue':'--red');
+    ctx.beginPath();ctx.arc(startX+i*36, H-50, 10, 0, 7);
+    ctx.fillStyle = i<active.index?cssCol('--gold') : i===active.index?c : 'rgba(255,255,255,.18)';
+    ctx.fill();
+  }
+  const barW=260,bx=W/2-barW/2,by=H-32;
+  ctx.fillStyle='rgba(255,255,255,.12)';ctx.fillRect(bx,by,barW,4);
+  ctx.save();ctx.globalCompositeOperation='lighter';ctx.fillStyle=cssCol('--gold');ctx.fillRect(bx,by,barW*remain,4);ctx.restore();
+}
+function drawSkillHud(now){
+  if(phase!=='game' && phase!=='gameover') return;
+  const W=cv.width, events=skillEvents();
+  const durationMs=((midiSong&&midiSong.durationSec)?midiSong.durationSec*1000:fallbackTime(MIDI_FALLBACK_BARS))||1;
+  const songT=now%durationMs;
+  let next=null; for(let k=skillState.nextEvent;k<events.length;k++){ next=events[k]; break; }
+  const active=skillState.active;
+  // ---- slim neon skill timeline (no boxes) ----
+  const tlX=W*0.32, tlY=46, tlW=W*0.36;
+  ctx.save();
+  ctx.strokeStyle='rgba(150,170,225,.16)';ctx.lineWidth=2;
+  ctx.beginPath();ctx.moveTo(tlX,tlY);ctx.lineTo(tlX+tlW,tlY);ctx.stroke();
+  ctx.globalCompositeOperation='lighter';
+  for(const ev of events){                              // upcoming skill markers bloom gold as they near
+    const px=tlX+((ev.timeMs%durationMs)/durationMs)*tlW;
+    const nr=Math.max(0,1-Math.abs((ev.timeMs%durationMs)-songT)/1400);
+    ctx.globalAlpha=0.35+0.65*nr;ctx.fillStyle=cssCol('--gold');
+    ctx.shadowColor=cssCol('--gold');ctx.shadowBlur=6+16*nr;
+    ctx.beginPath();ctx.arc(px,tlY,3.5+3.5*nr,0,7);ctx.fill();
+  }
+  ctx.restore();
+  const playX=tlX+(songT/durationMs)*tlW;             // playhead
+  ctx.save();ctx.strokeStyle='rgba(255,255,255,.7)';ctx.lineWidth=2;
+  ctx.beginPath();ctx.moveTo(playX,tlY-9);ctx.lineTo(playX,tlY+9);ctx.stroke();ctx.restore();
+  ctx.textAlign='center';ctx.font='bold 13px Segoe UI';
+  ctx.fillStyle=active?cssCol('--gold'):'#8a93b8';
+  ctx.fillText(active?('技能窗 · '+active.skill.name):(next?('下一技能 '+Math.max(0,(next.timeMs-now)/1000).toFixed(1)+'s'):'技能就绪'),W/2,tlY-16);
+  // ---- slot name chips in the corners (glow when firing) ----
+  ['A','B'].forEach((slot,i)=>{
+    const def=skillDefForSlot(slot), hot=active&&active.slot===slot, cx2=i===0?96:W-96;
+    ctx.save();ctx.textAlign='center';
+    if(hot){ctx.shadowColor=cssCol('--gold');ctx.shadowBlur=18;}
+    ctx.fillStyle=hot?cssCol('--gold'):'#aeb8db';ctx.font='bold 15px Segoe UI';
+    ctx.fillText(def.name,cx2,40);
+    ctx.fillStyle=def.effect.type==='damage'?cssCol('--red'):cssCol('--green');ctx.font='11px Segoe UI';
+    ctx.fillText(def.effect.type==='damage'?'伤害':'回血',cx2,56);
+    ctx.restore();
+  });
+}
+function drawTitle(now){
+  const W=cv.width,H=cv.height; ctx.textAlign='center';
+  ctx.save();ctx.shadowColor=cssCol('--blue');ctx.shadowBlur=26;
+  ctx.fillStyle='#eaf0ff';ctx.font='bold 66px Segoe UI';
+  ctx.fillText('MusicFight', W/2, H*0.40);
+  ctx.restore();
+  ctx.fillStyle='#9fb0e8';ctx.font='20px Segoe UI';
+  ctx.fillText('体感节奏 · 赛博朋克 RPG', W/2, H*0.40+46);
+  ctx.save();ctx.globalAlpha=0.5+0.5*Math.sin(now/350);
+  ctx.fillStyle=cssCol('--gold');ctx.font='bold 22px Segoe UI';
+  ctx.fillText('按任意键 / 点击屏幕  开始', W/2, H*0.66);
+  ctx.restore();
+}
+function drawChapterSelect(now){
+  const W=cv.width,H=cv.height; ctx.textAlign='center';
+  ctx.fillStyle='#9fb0e8';ctx.font='bold 26px Segoe UI';
+  ctx.fillText('选择章节', W/2, H*0.14);
+  ctx.fillStyle='#8a93b8';ctx.font='14px Segoe UI';
+  ctx.fillText('按数字键 1–'+CHAPTERS.length+' 选择已解锁的章节', W/2, H*0.14+26);
+  const cardW=W*0.6, cardH=70, x=W/2-cardW/2, y0=H*0.26, gap=16;
+  for(let i=0;i<CHAPTERS.length;i++){
+    const ch=CHAPTERS[i], y=y0+i*(cardH+gap), unlocked=isUnlocked(saveData,i), cleared=isCleared(saveData,i);
+    ctx.save();ctx.globalAlpha=unlocked?1:0.45;
+    ctx.fillStyle=unlocked?'rgba(58,120,255,.10)':'rgba(255,255,255,.04)';ctx.fillRect(x,y,cardW,cardH);
+    ctx.strokeStyle=unlocked?cssCol('--blue'):'rgba(255,255,255,.16)';ctx.lineWidth=2;ctx.strokeRect(x,y,cardW,cardH);
+    ctx.textAlign='left';
+    ctx.fillStyle=unlocked?'#eaf0ff':'#8a93b8';ctx.font='bold 22px Segoe UI';
+    ctx.fillText((i+1)+'.  '+ch.title, x+22, y+33);
+    ctx.fillStyle='#9fb0e8';ctx.font='14px Segoe UI';
+    ctx.fillText(ch.subtitle, x+22, y+56);
+    ctx.textAlign='right';
+    ctx.fillStyle=cleared?cssCol('--gold'):unlocked?cssCol('--green'):'#8a93b8';ctx.font='bold 15px Segoe UI';
+    ctx.fillText(cleared?'已通关 ★':unlocked?'可挑战':'未解锁',x+cardW-22,y+41);
+    ctx.restore();
+  }
+  ctx.textAlign='center';ctx.fillStyle='#8a93b8';ctx.font='13px Segoe UI';
+  ctx.fillText('通关后自动解锁下一章并存档', W/2, H-24);
+}
+function drawGetReady(){
+  const W=cv.width,H=cv.height,e=performance.now()-getReadyWall;
+  let big,small='';
+  if(e<1000){ big='准备出击！'; small='摆好架势，举起双拳'; }
+  else { const n=5-Math.floor((e-1000)/1000); big = n>=1?String(n):'开始！'; }
+  ctx.textAlign='center';
+  ctx.fillStyle=cssCol('--gold');ctx.font='bold 92px Segoe UI';
+  ctx.fillText(big, W/2, H/2+24);
+  if(small){ ctx.fillStyle='#cfd6f5';ctx.font='22px Segoe UI';ctx.fillText(small, W/2, H/2+72); }
+}
+function drawMenuDots(now, yy){
+  const W=cv.width;
+  for(const side of ['left','right']){
+    const m=hands[side].menu, on=m && now-m.t<800;
+    const x=W/2 + (side==='left'?-28:28);
+    ctx.beginPath();ctx.arc(x,yy,9,0,7);
+    ctx.fillStyle = on?cssCol(side==='left'?'--blue':'--red'):'rgba(255,255,255,.18)';ctx.fill();
+  }
+  ctx.fillStyle='#8a93b8';ctx.font='12px Segoe UI';ctx.textAlign='center';
+  ctx.fillText('左右拳要打出同一方向', W/2, yy+26);
+}
+function drawIntro(now){
+  const W=cv.width,H=cv.height;
+  ctx.textAlign='center';
+  ctx.fillStyle='#e8ecff';ctx.font='bold 32px Segoe UI';
+  ctx.fillText('战斗即将开始 — 请双手抱拳', W/2, H*0.28);
+  ctx.fillStyle='#9fb0e8';ctx.font='22px Segoe UI';
+  ctx.fillText('要先进入操作教学吗？', W/2, H*0.28+42);
+  ctx.font='bold 26px Segoe UI';
+  ctx.fillStyle=cssCol('--green');
+  ctx.fillText('▲ 双拳上击 → 进入教学', W/2, H*0.28+104);
+  ctx.fillStyle='#cfd6f5';
+  ctx.fillText('▼ 双拳下击 → 跳过', W/2, H*0.28+146);
+  drawMenuDots(now, H*0.28+196);
+}
+function drawDebug(){
+  if(!det||!det.landmarks||!det.landmarks.length) return;
+  const w=300,h=225,x=cv.width-w-16,y=cv.height-h-40;
+  ctx.save();
+  ctx.globalAlpha=0.9;
+  // mirror the cam inset
+  ctx.translate(x,y);
+  if(cfg.mirror){ctx.translate(w,0);ctx.scale(-1,1);}
+  try{ctx.drawImage(video,0,0,w,h);}catch(e){}
+  ctx.setTransform(1,0,0,1,0,0);
+  // border
+  ctx.strokeStyle='#2c365f';ctx.lineWidth=2;ctx.strokeRect(x,y,w,h);
+  const lm=det.landmarks[0];
+  const P=(i)=>({x:x+(cfg.mirror?(1-lm[i].x):lm[i].x)*w, y:y+lm[i].y*h});
+  // skeleton
+  ctx.strokeStyle='rgba(160,200,255,.6)';ctx.lineWidth=2;
+  const seg=[[L.lsho,L.rsho],[L.lsho,L.lelb],[L.lelb,L.lwri],[L.rsho,L.relb],[L.relb,L.rwri],[L.lsho,L.lhip],[L.rsho,L.rhip],[L.lhip,L.rhip]];
+  for(const[a,b]of seg){const pa=P(a),pb=P(b);ctx.beginPath();ctx.moveTo(pa.x,pa.y);ctx.lineTo(pb.x,pb.y);ctx.stroke();}
+  // ---- the 4 judgment lines, drawn on the body (start-in-middle + cross-the-line) ----
+  const cx=(lm[L.lsho].x+lm[L.rsho].x)/2;
+  const shoY=(lm[L.lsho].y+lm[L.rsho].y)/2, hipY=(lm[L.lhip].y+lm[L.rhip].y)/2;
+  const torso=Math.max(0.05,hipY-shoY);
+  const sW=Math.max(0.05,Math.hypot(lm[L.lsho].x-lm[L.rsho].x,lm[L.lsho].y-lm[L.rsho].y));
+  const viewCx=cfg.mirror?1-cx:cx;
+  const vLineX=o=>x+(viewCx+o*sW)*w;                   // x of a vertical line o shoulder-widths right of center (view)
+  const vline=(o,c)=>{ctx.strokeStyle=c;ctx.lineWidth=2;
+    ctx.beginPath();ctx.moveTo(vLineX(o),y);ctx.lineTo(vLineX(o),y+h);ctx.stroke();};
+  const hline=(vy,c)=>{const yy=y+(shoY+vy*torso)*h;ctx.strokeStyle=c;ctx.lineWidth=2;
+    ctx.beginPath();ctx.moveTo(x,yy);ctx.lineTo(x+w,yy);ctx.stroke();};
+  vline(0,'rgba(255,210,60,.35)');                      // centerline (dim)
+  vline(cfg.lineLeft,  cssCol('--blue'));               // left-hand line (right of center)
+  vline(-cfg.lineRight,cssCol('--red'));                // right-hand line (left of center)
+  hline(cfg.lineHigh, cssCol('--gold'));                // high line
+  hline(cfg.lineLow,  cssCol('--gold'));                // low line
+  // ---- FILTERED wrist markers + swing-start trail (shows smoothing on both axes) ----
+  for(const side of ['left','right']){
+    const hd=hands[side];
+    const fx=x+(cfg.mirror?(1-hd.fx):hd.fx)*w, fy=y+hd.fy*h;
+    const col=cssCol(side==='left'?'--blue':'--red');
+    const s=hd.hist.length?hd.hist[0]:null;
+    if(s){ const sx=x+(cfg.mirror?(1-s.x):s.x)*w, sy=y+s.y*h;
+      ctx.save();ctx.globalAlpha=.4;ctx.strokeStyle=col;ctx.lineWidth=2;
+      ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(fx,fy);ctx.stroke();
+      ctx.fillStyle=col;ctx.beginPath();ctx.arc(sx,sy,3,0,7);ctx.fill();ctx.restore(); }
+    ctx.fillStyle=col;ctx.beginPath();ctx.arc(fx,fy,hd.punch.state==='cooldown'?9:6,0,7);ctx.fill();
+  }
+  // readout
+  ctx.font='11px Consolas,monospace';ctx.textAlign='left';
+  ctx.fillStyle=cssCol('--blue');ctx.fillText(`L ${hands.left.lane.padEnd(4)} act ${hands.left.act.toFixed(2)} ${hands.left.punch.state}`,x,y-20);
+  ctx.fillStyle=cssCol('--red'); ctx.fillText(`R ${hands.right.lane.padEnd(4)} act ${hands.right.act.toFixed(2)} ${hands.right.punch.state}`,x,y-6);
+  ctx.restore();
+}
+
+function drawEnd(now){
+  ctx.fillStyle='rgba(4,5,12,.82)';ctx.fillRect(0,0,cv.width,cv.height);
+  ctx.textAlign='center';
+  ctx.fillStyle=win?cssCol('--gold'):cssCol('--red');
+  ctx.font='bold 60px Segoe UI';
+  ctx.fillText(win?'胜利 ! VICTORY':'失败 DEFEAT',cv.width/2,cv.height/2-70);
+  ctx.fillStyle='#cfd6f5';ctx.font='22px Segoe UI';
+  ctx.fillText(`分数 ${score} · 最大连击 ${maxCombo} · P${stats.perfect} G${stats.good} M${stats.miss}`,cv.width/2,cv.height/2-22);
+  ctx.fillStyle=cssCol('--green');ctx.font='bold 28px Segoe UI';
+  ctx.fillText('▲ 双拳上击 — 再来一局',cv.width/2,cv.height/2+34);
+  drawMenuDots(now, cv.height/2+74);
+  ctx.fillStyle='#8a93b8';ctx.font='14px Segoe UI';
+  ctx.fillText('(也可按 R / 点击屏幕)',cv.width/2,cv.height/2+118);
+}
+
+/* ============================================================
+   FRAME
+   ============================================================ */
+let lastFrame=performance.now();
+function frame(){
+  try{
+    const wall=performance.now();
+    const dt=wall-lastFrame; lastFrame=wall;
+    fpsN++; if(wall-fpsT>500){fps=fpsN*1000/(wall-fpsT);fpsT=wall;fpsN=0;}
+    if(toastT&&wall>toastT){toastEl.style.display='none';toastT=0;}
+    let now=started?gameNow():0;
+    if(started){
+      try{ detectPose(now); }catch(e){ console.error('detectPose:',e); }  // isolate: game keeps running
+      try{ scheduleMidi(); }catch(e){ console.error('scheduleMidi:',e); }
+      try{ scheduleClicks(); }catch(e){ console.error('scheduleClicks:',e); }
+      now=gameNow();   // detectPose may have reset the clock (replay/skip gesture) → refresh before update
+      update(now,dt);                                                      // spawns the notes
+    }
+    render(now);
+  }catch(e){ console.error('frame:',e); }
+  requestAnimationFrame(frame);   // ALWAYS reschedule — the loop must never die
+}
+
+/* ============================================================
+   START / CONTROLS
+   ============================================================ */
+async function start(){
+  startBtn.disabled=true; startBtn.textContent='加载中…'; errBox.textContent='';
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({video:{width:640,height:480,facingMode:'user'},audio:false});
+    video.srcObject=stream; await video.play();
+  }catch(e){ fail('摄像头打开失败：'+e.message+'\n请确认已允许摄像头权限。若用 file:// 打开且被拦截，请改用本地服务器(见 README)。'); return; }
+  try{ startBtn.textContent='加载检测模型…'; await initPose(); }
+  catch(e){ fail('模型加载失败：'+e.message+'\n需要联网下载 MediaPipe 模型(首次)。'); return; }
+  actx=new (window.AudioContext||window.webkitAudioContext)();
+  master=actx.createGain(); master.gain.value=0.9; master.connect(actx.destination);
+  await actx.resume();
+  await loadBattleMidi();
+  resetGame();
+  t0 = actx.currentTime*1000 + 300;   // small lead so clock is positive
+  saveData = loadSaveData();
+  phase = cfg.testMode ? 'practice' : 'title';      // normal start = title -> chapter select
+  tutStep=0; tutReps=0; tutFlash=null; tutHoldUntil=0;
+  started=true; overlay.style.display='none';
+}
+function fail(m){ errBox.textContent=m; startBtn.disabled=false; startBtn.textContent='重试'; }
+
+function restart(){
+  paused=false;
+  if(phase==='game' || phase==='gameover'){ enterGame(); return; }     // replay the battle
+  // otherwise go back to the start ask (or practice)
+  stopAudioPlayback();
+  resetGame();
+  if(actx) t0=actx.currentTime*1000+300;
+  phase = cfg.testMode ? 'practice' : 'intro';
+  tutStep=0; tutReps=0; tutFlash=null; tutHoldUntil=0;
+  skillTut={slotIndex:0,mode:'trigger',seqIndex:0,trigger:{left:null,right:null},flash:null};
+}
+
+startBtn.addEventListener('click',start);
+document.getElementById('restartBtn').addEventListener('click',()=>{ if(actx){ restart(); toast('已重新开始 ↺'); } });
+cv.addEventListener('click',()=>{ if(!started) return; if(phase==='title'){ phase='chapterselect'; return; } if(gameOver){ restart(); toast('已重新开始 ↺'); } });
+document.getElementById('gear').addEventListener('click',()=>document.getElementById('panel').classList.toggle('show'));
+document.getElementById('loadMusicBtn').addEventListener('click',()=>document.getElementById('musicFile').click());
+document.getElementById('musicFile').addEventListener('change',e=>{ if(e.target.files[0]&&actx) loadSong(e.target.files[0]); else if(e.target.files[0]) {toast('请先点击开始');} });
+
+window.addEventListener('keydown',e=>{
+  if(started && phase==='title'){ phase='chapterselect'; return; }
+  if(started && phase==='chapterselect'){ const n=parseInt(e.key,10); if(n>=1 && n<=CHAPTERS.length && isUnlocked(saveData,n-1)) startChapter(n-1); return; }
+  if(e.code==='KeyD'){cfg.debug=!cfg.debug;syncUI();}
+  else if(e.code==='Space'){e.preventDefault();paused=!paused;toast(paused?'已暂停':'继续');}
+  else if(e.code==='KeyR'&&started){restart();}
+});
+
+// ---- settings wiring ----
+function bindRange(id,key,valId,fmt){
+  const el=document.getElementById(id);
+  el.addEventListener('input',()=>{cfg[key]=parseFloat(el.value);document.getElementById(valId).textContent=fmt?fmt(cfg[key]):cfg[key];});
+}
+bindRange('cfgTrig','triggerLevel','vTrig',v=>v.toFixed(1));
+document.getElementById('cfgTrig').addEventListener('input',()=>{cfg.resetLevel=cfg.triggerLevel*0.6;});
+document.getElementById('cfgTest').addEventListener('change',e=>{cfg.testMode=e.target.value==='1'; if(started){ stopAudioPlayback(); resetGame(); if(actx)t0=actx.currentTime*1000+300; phase=cfg.testMode?'practice':'intro'; tutStep=0; tutReps=0; tutFlash=null; tutHoldUntil=0; skillTut={slotIndex:0,mode:'trigger',seqIndex:0,trigger:{left:null,right:null},flash:null}; }});
+bindRange('cfgSmooth','minCutoff','vSmooth',v=>v.toFixed(1));
+bindRange('cfgLineHigh','lineHigh','vLineHigh',v=>v.toFixed(2));
+bindRange('cfgLineLow','lineLow','vLineLow',v=>v.toFixed(2));
+bindRange('cfgLineLeft','lineLeft','vLineLeft',v=>v.toFixed(2));
+bindRange('cfgLineRight','lineRight','vLineRight',v=>v.toFixed(2));
+bindRange('cfgBpm','bpm','vBpm');
+bindRange('cfgApproach','approach','vApproach');
+bindRange('cfgCal','calibration','vCal');
+bindRange('cfgWin','goodWindow','vWin');
+document.getElementById('cfgMode').addEventListener('change',e=>cfg.mode=e.target.value);
+document.getElementById('cfgSkillA').addEventListener('change',e=>{equippedSkills.A=e.target.value;});
+document.getElementById('cfgSkillB').addEventListener('change',e=>{equippedSkills.B=e.target.value;});
+document.getElementById('crossBtn').addEventListener('click',e=>{cfg.requireCross=!cfg.requireCross;e.target.classList.toggle('on',cfg.requireCross);e.target.textContent=cfg.requireCross?'过线必须 ✓':'过线必须';});
+document.getElementById('mirrorBtn').addEventListener('click',e=>{cfg.mirror=!cfg.mirror;e.target.classList.toggle('on',cfg.mirror);e.target.textContent=cfg.mirror?'镜像 ✓':'镜像';});
+document.getElementById('dbgBtn').addEventListener('click',e=>{cfg.debug=!cfg.debug;e.target.classList.toggle('on',cfg.debug);e.target.textContent=cfg.debug?'调试叠加 ✓':'调试叠加';});
+
+function syncUI(){
+  document.getElementById('cfgTest').value=cfg.testMode?'1':'0';
+  document.getElementById('cfgMode').value=cfg.mode;
+  document.getElementById('cfgSkillA').value=equippedSkills.A;
+  document.getElementById('cfgSkillB').value=equippedSkills.B;
+  cfg.resetLevel=cfg.triggerLevel*0.6;
+  const set=(id,v,f)=>{document.getElementById(id).value=v;};
+  set('cfgTrig',cfg.triggerLevel);document.getElementById('vTrig').textContent=cfg.triggerLevel.toFixed(1);
+  set('cfgSmooth',cfg.minCutoff);document.getElementById('vSmooth').textContent=cfg.minCutoff.toFixed(1);
+  set('cfgLineHigh',cfg.lineHigh);document.getElementById('vLineHigh').textContent=cfg.lineHigh.toFixed(2);
+  set('cfgLineLow',cfg.lineLow);document.getElementById('vLineLow').textContent=cfg.lineLow.toFixed(2);
+  set('cfgLineLeft',cfg.lineLeft);document.getElementById('vLineLeft').textContent=cfg.lineLeft.toFixed(2);
+  set('cfgLineRight',cfg.lineRight);document.getElementById('vLineRight').textContent=cfg.lineRight.toFixed(2);
+  set('cfgBpm',cfg.bpm);document.getElementById('vBpm').textContent=cfg.bpm;
+  set('cfgApproach',cfg.approach);document.getElementById('vApproach').textContent=cfg.approach;
+  set('cfgCal',cfg.calibration);document.getElementById('vCal').textContent=cfg.calibration;
+  set('cfgWin',cfg.goodWindow);document.getElementById('vWin').textContent=cfg.goodWindow;
+  document.getElementById('crossBtn').classList.toggle('on',cfg.requireCross);
+  document.getElementById('crossBtn').textContent=cfg.requireCross?'过线必须 ✓':'过线必须';
+  document.getElementById('dbgBtn').classList.toggle('on',cfg.debug);
+  document.getElementById('dbgBtn').textContent=cfg.debug?'调试 ✓':'调试';
+}
+
+// responsive canvas
+function fit(){
+  const r=Math.min(window.innerWidth/1280,window.innerHeight/720);
+  cv.style.width=(1280*r)+'px';cv.style.height=(720*r)+'px';
+}
+window.addEventListener('resize',fit);
+fit(); syncUI(); requestAnimationFrame(frame);
+
+// expose pure fns for console testing
+window.__mf={laneFromY,newPunch,updatePunch,judgeHit};
+</script>
+</body>
+</html>
