@@ -122,7 +122,7 @@
 
 <div id="overlay">
   <h1>MusicFight</h1>
-  <p>体感音游。站到摄像头前(上半身入画)。开始后先学<strong>6 个基础动作</strong>，然后进入<strong>技能教学</strong>：MIDI 触发轨给出技能窗口，游戏按当前 A/B 槽技能渲染对应音色与效果。</p>
+  <p><strong>体感操作指南</strong>　站到摄像头前，上半身入画，双手分开抱拳、与胸同高。<br>双手同时上击 = 上一条　·　双手左右平拳交叉 = 确认　·　双手同时下击 = 下一条</p>
   <button id="startBtn">点击开始 (允许摄像头)</button>
   <div class="hint">按 <kbd>D</kbd> 切换调试叠加 · <kbd>Space</kbd> 暂停 · 右上角 ⚙ 调参数</div>
   <div id="err"></div>
@@ -130,8 +130,10 @@
 
 <script type="module">
 import { PoseLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
-import { loadSaveData, writeSaveData, markCleared, isUnlocked, isCleared, defaultSave } from './save.js';
-import { CHAPTERS } from './chapters.js';
+import { loadSaveData, writeSaveData, markCleared, isUnlocked, isCleared, defaultSave, markSceneSeen, isSceneSeen } from './save.js';
+import { CHAPTERS, LEVELS, levelIndexById, levelById, chapterOfLevel, levelIndicesOfChapter, chTitle, chSub, lvTitle, lvSub } from './chapters.js';
+import { SCENES, locLine, speakerName } from './story.js';
+import { t as i18nT } from './i18n.js';
 
 /* ============================================================
    PURE GAME LOGIC  (unit-tested separately, no DOM/MediaPipe)
@@ -203,7 +205,24 @@ const cfg = {
   attackGap:60000/BATTLE_BPM*1.5,   // 1.5 music beats (~682ms) — attacks lock to the BGM's 8th-note grid
   goodWindow:280, perfectWindow:120,         // forgiving casual hit windows
   mirror:true, debug:false,
+  lang:'zh',              // 'zh' | 'en' — set from saveData.settings on boot
 };
+// i18n shorthand bound to the live language.
+function T(key, ...args){ return i18nT(key, cfg.lang, ...args); }
+// Control-tuning params that the Settings screen persists to localStorage.
+const TUNABLE_KEYS = ['mode','triggerLevel','resetLevel','minCutoff','beta','dCutoff','velWindow',
+  'minGap','trajWindow','lineHigh','lineLow','lineLeft','lineRight','requireCross','calibration','mirror'];
+function applySavedSettings(d){
+  const s = (d && d.settings) || {};
+  if(s.lang==='zh'||s.lang==='en') cfg.lang = s.lang;
+  for(const k of TUNABLE_KEYS){ if(s[k]!==undefined) cfg[k] = s[k]; }
+}
+function persistSettings(){
+  saveData.settings = saveData.settings || {};
+  saveData.settings.lang = cfg.lang;
+  for(const k of TUNABLE_KEYS) saveData.settings[k] = cfg[k];
+  writeSaveData(saveData);
+}
 
 /* ============================================================
    DOM
@@ -444,6 +463,22 @@ async function loadBattleMidi(){
       `当前: 内置 MIDI 兜底 · 实时合成 · 技能触发 ${midiSong.triggerEvents.length} 个`;
   }
 }
+// load a specific level's BGM (per-song tempo). fire-and-forget; getready gives time to fetch.
+let currentBgmUrl = BATTLE_MIDI_URL;
+async function loadLevelBgm(url){
+  currentBgmUrl = url || BATTLE_MIDI_URL;
+  try{
+    const res=await fetch(currentBgmUrl,{cache:'no-store'});
+    if(!res.ok) throw new Error(res.status+' '+res.statusText);
+    midiSong=parseMidiFile(await res.arrayBuffer());
+    document.getElementById('musicName').textContent =
+      `当前: ${currentBgmUrl} · MIDI 实时合成 · 技能触发 ${midiSong.triggerEvents.length} 个`;
+  }catch(e){
+    console.warn('level MIDI load failed:',e); midiSong=makeFallbackBattleSong();
+    document.getElementById('musicName').textContent =
+      `当前: 内置兜底(载入失败) · 技能触发 ${midiSong.triggerEvents.length} 个`;
+  }
+}
 function startMidiSong(){
   if(!midiSong || usingSong) return false;
   usingMidi=true; midiEventIndex=0; midiLoop=0; midiStartedAtSec=t0/1000;
@@ -533,7 +568,7 @@ function playSkillSuccessSfx(def){               // BIG payoff — make it pop o
   }
 }
 function playSkillOpenCue(def){                   // a few beats of the skill's TIMBRE — announces the window opened
-  if(!actx) return; const t=actx.currentTime+0.03, b=60/BATTLE_BPM;
+  if(!actx) return; const t=actx.currentTime+0.03, b=60/cfg.bpm;
   if(def.effect.type==='heal'){                   // glass bell, rising
     [[0,659.25],[b*0.5,783.99],[b,987.77],[b*1.5,1318.5]].forEach(([dt,f])=>{
       scheduleTone(t+dt,f,0.55,0.14,'triangle',0.16,7000);
@@ -620,24 +655,75 @@ let nextStep=0, gameOver=false, win=false;
 let stats={perfect:0,good:0,miss:0};
 
 // ---- phase / tutorial ----
-let phase='intro';                 // 'title' | 'chapterselect' | 'intro' | 'tutorial' | 'skilltutorial' | 'getready' | 'game' | 'gameover' | 'practice'
+let phase='menu';                  // 'menu' | 'loadmenu' | 'settings' | 'training' | 'intro' | 'tutorial' | 'skilltutorial' | 'getready' | 'game' | 'gameover' | 'practice'
 let saveData=defaultSave();        // persistent progress (localStorage)
-let currentChapter=0, chapterMaxHP=MAX_ENEMY_HP;   // selected chapter + its enemy HP
-function startChapter(idx){
-  currentChapter=idx; chapterMaxHP=CHAPTERS[idx].enemyHP||MAX_ENEMY_HP;
-  if(saveData.tutorialDone) startGetReady(); else phase='intro';   // first run = teach; after = straight in
+let currentLevel=0, levelMaxHP=MAX_ENEMY_HP;   // active level index + its enemy HP
+let selectedChapter=0;                  // which chapter the level-select sub-menu is showing
+let scene=null, sceneIdx=0, sceneAdvT=0;// active cutscene, line cursor, punch-advance debounce
+let pendingStart=null;                  // function to run after the "站好确认" ready-gate
+let storyTeaching=false;                // true while the opening tutorial chain is running
+let trainingMode=false;                 // true = free training battle (no story progress)
+let gmenu=null;                         // active gesture menu (pause / training song-select)
+let pauseMenuOpen=false;                // pause overlay is up (game frozen behind it)
+let crossStart=0, pauseGestArmed=true, pauseGestT=0;  // cross-arms hold + pause-nav debounce (wall-clock)
+
+function startLevel(idx){
+  if(idx<0 || idx>=LEVELS.length){ phase='menu'; return; }   // ran past the chapter end
+  currentLevel=idx;
+  const lv=LEVELS[idx];
+  levelMaxHP=lv.enemyHP||MAX_ENEMY_HP;
+  cfg.bpm=lv.bpm||BATTLE_BPM; cfg.attackGap=60000/cfg.bpm*1.5;   // enemy cadence ← this song's tempo
+  loadLevelBgm(lv.bgm);                                          // async; battle starts after pre-scene/countdown
+  saveData.lastLevel=idx; writeSaveData(saveData);              // autosave: remember where we are
+  if(lv.pre && !isSceneSeen(saveData, lv.pre)){ playScene(lv.pre); return; }   // play intro cutscene once
+  beginLevelBattle();
+}
+function beginLevelBattle(){ startGetReady(); }   // teaching is driven by the opening scene chain, not here
+// "站好确认" ready-gate: give the player time to stand in frame before story/level starts
+function readyThen(fn){ pendingStart=fn; phase='getset'; }
+function confirmReady(){ const fn=pendingStart; pendingStart=null; if(fn) fn(); }
+function proceedAfterWin(){
+  const lv=LEVELS[currentLevel];
+  stopAudioPlayback();
+  if(lv.post){ playScene(lv.post); }       // post-scene's `next` decides 下一关 / 回菜单
+  else startLevel(currentLevel+1);
+}
+
+// ---- cutscene (story) playback ----
+function playScene(id){
+  const s=SCENES[id];
+  if(!s){ onSceneEnd(id, null); return; }   // missing scene → skip gracefully
+  scene={id, data:s}; sceneIdx=0; sceneAdvT=performance.now()+250; phase='cutscene';
+}
+function advanceScene(){
+  if(!scene) return;
+  sceneIdx++;
+  if(sceneIdx < scene.data.lines.length) return;
+  const id=scene.id, next=scene.data.next; scene=null;
+  markSceneSeen(saveData,id); writeSaveData(saveData);
+  onSceneEnd(id, next);
+}
+function sceneBack(){ if(scene) sceneIdx=Math.max(0, sceneIdx-1); }   // 双拳上击 = 回上一句(防误触)
+function onSceneEnd(id, next){
+  if(next==='battle'){ beginLevelBattle(); }              // current level's battle
+  else if(next==='tutorial'){ storyTeaching=true; phase='tutorial'; tutStep=0; tutReps=0; tutFlash=null; tutHoldUntil=0; }  // 碎片教学
+  else if(next==='level'){ startLevel(currentLevel+1); }  // advance to next level
+  else if(next && SCENES[next]){ playScene(next); }       // chain another scene
+  else { phase='menu'; }
 }
 let getReadyWall=0;                // wall-clock ms when the countdown started
 const TUT_NEED=2;                  // successful reps required per move
 let tutStep=0, tutReps=0, tutFlash=null, tutHoldUntil=0;   // tutFlash = {ok, txt, t}; tutHoldUntil = celebrate-then-advance
 const TUTORIAL=[
-  {hand:'left', lane:'high', name:'左上拳', cue:'左拳快速上击，越过头顶高线'},
-  {hand:'left', lane:'mid',  name:'左中拳', cue:'左拳快速向右横击，越过身体中线'},
-  {hand:'left', lane:'low',  name:'左下拳', cue:'左拳快速下压，低过腰线'},
-  {hand:'right',lane:'high', name:'右上拳', cue:'右拳快速上击，越过头顶高线'},
-  {hand:'right',lane:'mid',  name:'右中拳', cue:'右拳快速向左横击，越过身体中线'},
-  {hand:'right',lane:'low',  name:'右下拳', cue:'右拳快速下压，低过腰线'},
+  {hand:'left', lane:'high', name:'左上拳', cue:'左拳快速上击，越过头顶高线',   name_en:'Left High',  cue_en:'Left fist up — cross the high line'},
+  {hand:'left', lane:'mid',  name:'左中拳', cue:'左拳快速向右横击，越过身体中线', name_en:'Left Mid',   cue_en:'Left fist swing right — cross center'},
+  {hand:'left', lane:'low',  name:'左下拳', cue:'左拳快速下压，低过腰线',       name_en:'Left Low',   cue_en:'Left fist down — below the low line'},
+  {hand:'right',lane:'high', name:'右上拳', cue:'右拳快速上击，越过头顶高线',   name_en:'Right High', cue_en:'Right fist up — cross the high line'},
+  {hand:'right',lane:'mid',  name:'右中拳', cue:'右拳快速向左横击，越过身体中线', name_en:'Right Mid',  cue_en:'Right fist swing left — cross center'},
+  {hand:'right',lane:'low',  name:'右下拳', cue:'右拳快速下压，低过腰线',       name_en:'Right Low',  cue_en:'Right fist down — below the low line'},
 ];
+function tutName(g){ return (cfg.lang==='en' && g.name_en) ? g.name_en : g.name; }
+function tutCue(g){ return (cfg.lang==='en' && g.cue_en) ? g.cue_en : g.cue; }
 
 const SKILLS={
   rupture:{
@@ -815,7 +901,7 @@ function handleSkillTutorialPunch(hand,lane,now){
     if(skillTut.seqIndex>=def.sequence.length){
       playSkillSuccessSfx(def);
       skillTut.slotIndex++;
-      if(skillTut.slotIndex>=2) startGetReady();
+      if(skillTut.slotIndex>=2){ if(storyTeaching){ storyTeaching=false; playScene('after_tutorial'); } else startGetReady(); }   // 教学完→说两句→开打
       else skillTut={slotIndex:skillTut.slotIndex,mode:'trigger',seqIndex:0,trigger:{left:null,right:null},flash:{ok:true,t:now,txt:'下一个技能'}};
     }else{
       skillTut.flash={ok:true,t:now,txt:'OK'};
@@ -826,8 +912,10 @@ function handleSkillTutorialPunch(hand,lane,now){
 }
 function enterGame(){
   phase='game';
+  paused=false; pauseMenuOpen=false; gmenu=null; crossStart=0;        // clear any pause state
+  if(actx && actx.state==='suspended') actx.resume();                 // ensure clock runs
   balls=[];particles=[];beams=[];pops=[];
-  score=0;combo=0;maxCombo=0;enemyHP=chapterMaxHP;playerHP=MAX_PLAYER_HP;
+  score=0;combo=0;maxCombo=0;enemyHP=levelMaxHP;playerHP=MAX_PLAYER_HP;
   nextStep=0;nextClickBeat=0;gameOver=false;win=false;stats={perfect:0,good:0,miss:0};  // reset beat cursor too (else metronome drifts away each replay)
   resetSkills();
   if(actx) t0=actx.currentTime*1000+300;
@@ -838,7 +926,7 @@ function enterGame(){
 }
 function endGame(won){
   gameOver=true; win=won; phase='gameover'; usingMidi=false;
-  if(won){ markCleared(saveData,currentChapter,score); writeSaveData(saveData); }   // persist progress + unlock next
+  if(won && !trainingMode){ markCleared(saveData,currentLevel,score); writeSaveData(saveData); }   // story only: persist + unlock
   hands.left.menu=null; hands.right.menu=null;
 }
 
@@ -850,6 +938,7 @@ function checkDouble(now){
   if(Math.abs(L.t-R.t)>550) return null;            // roughly together
   if(L.lane==='high' && R.lane==='high') return 'up';
   if(L.lane==='low'  && R.lane==='low')  return 'down';
+  if(L.lane==='mid'  && R.lane==='mid')  return 'mid';   // 左右平拳交叉 = 确认
   return null;
 }
 function menuPunch(hand, lane, now){
@@ -861,12 +950,15 @@ function menuPunch(hand, lane, now){
   if(act){ hands.left.menu=null; hands.right.menu=null; doMenu(act); }
 }
 function doMenu(act){
+  if(phase==='getset'){ if(act==='mid') confirmReady(); return; }               // 平拳 = 确认站好,开始
+  if(phase==='cutscene'){ if(act==='down') advanceScene(); else if(act==='up') sceneBack(); return; }  // 下=下一句 上=上一句
+  if(phase==='training'){ if(act==='up') gnavUp(); else if(act==='down') gnavDown(); else if(act==='mid') gnavConfirm(); return; }  // 训练选曲手势
   if(phase==='intro'){
     if(act==='up'){ phase='tutorial'; tutStep=0; tutReps=0; tutFlash=null; tutHoldUntil=0; }   // 双拳上击 = 进入教学
     else { startGetReady(); }                                                   // 双拳下击 = 跳过
   } else if(phase==='gameover'){
-    if(act==='up') enterGame();                                                 // 双拳上击 = 再来一局
-    else if(act==='down'){ stopAudioPlayback(); phase='chapterselect'; }        // 双拳下击 = 回选关
+    if(act==='up'){ if(trainingMode) enterGame(); else if(win) proceedAfterWin(); else enterGame(); }   // 训练/失败=再来 · 胜=继续
+    else if(act==='down'){ stopAudioPlayback(); if(trainingMode){ trainingMode=false; openTrainingMenu(); } else phase='menu'; }
   }
 }
 
@@ -918,8 +1010,8 @@ function registerPunch(hand, lane, now, hitT){
   const col = hand==='left'?'--blue':'--red';
   const y = laneY(lane);
   shake=Math.min(shake+6,16);
-  if (phase==='getready'||phase==='title'||phase==='chapterselect') return;   // menu screens use mouse/keys
-  if (phase==='intro' || phase==='gameover'){ menuPunch(hand, lane, now); return; }
+  if (phase==='intro' || phase==='gameover' || phase==='cutscene' || phase==='getset' || phase==='training'){ menuPunch(hand, lane, now); return; }  // gesture-driven screens
+  if (phase==='getready'||isMenuPhase()) return;   // other menu screens use mouse/keys, not punches
   if (phase==='practice'){
     beams.push({ y, col, t:now, hand, lane, reach:SPAWNX() });
     burst(HITX(), y, col, 18);
@@ -935,13 +1027,13 @@ function registerPunch(hand, lane, now, hitT){
     if(hand===g.hand && lane===g.lane){
       tutReps++;
       if(tutReps>=TUT_NEED){
-        tutFlash={ok:true, t:now, txt:'成功！完成 ✓'};
+        tutFlash={ok:true, t:now, txt:T('tut.done')};
         tutHoldUntil=now+1100;                  // hold the success feedback, THEN move on (set in update)
       }else{
-        tutFlash={ok:true, t:now, txt:'很好！再来一次 ('+tutReps+'/'+TUT_NEED+')'};
+        tutFlash={ok:true, t:now, txt:T('tut.again', tutReps, TUT_NEED)};
       }
     } else {
-      tutFlash={ok:false, t:now, txt:'不是这个 — 现在要：'+g.name};
+      tutFlash={ok:false, t:now, txt:T('tut.wrong', tutName(g))};
     }
     return;
   }
@@ -1009,6 +1101,8 @@ function detectPose(now){
   bodyRef=body;
   processHand('left',  lm[L.lwri], lsho, body, now);
   processHand('right', lm[L.rwri], rsho, body, now);
+  if(pauseMenuOpen) pauseNav(lm, body);                          // navigate pause menu by pose (clock is frozen)
+  else if(phase==='game' && !paused) detectCrossArms(lm, body);  // hold crossed arms ~1.6s → pause
 }
 
 let lastDetT=null, bodyRef=null;
@@ -1162,25 +1256,26 @@ function render(now){
     ctx.fillRect(-20,-20,W+40,H+40);
     ctx.restore();
   }
-  // lane tracks
-  for(const lane of LANES){
-    const y=laneY(lane);
-    ctx.strokeStyle='rgba(120,140,210,.12)';ctx.lineWidth=2;
-    ctx.beginPath();ctx.moveTo(HITX(),y);ctx.lineTo(SPAWNX(),y);ctx.stroke();
+  // lane tracks + hit line — hidden on menu / cutscene / ready-gate screens for a clean look
+  if(!isMenuPhase() && phase!=='cutscene' && phase!=='getset'){
+    for(const lane of LANES){
+      const y=laneY(lane);
+      ctx.strokeStyle='rgba(120,140,210,.12)';ctx.lineWidth=2;
+      ctx.beginPath();ctx.moveTo(HITX(),y);ctx.lineTo(SPAWNX(),y);ctx.stroke();
+    }
+    ctx.save();ctx.globalCompositeOperation='lighter';
+    const grd=ctx.createLinearGradient(HITX()-30,0,HITX()+30,0);
+    grd.addColorStop(0,'rgba(120,180,255,0)');grd.addColorStop(1,'rgba(120,180,255,.5)');
+    ctx.fillStyle=grd;ctx.fillRect(HITX()-30,H*0.22,60,H*0.56);ctx.restore();
+    ctx.strokeStyle='rgba(160,200,255,.55)';ctx.lineWidth=3;
+    ctx.beginPath();ctx.moveTo(HITX(),H*0.22);ctx.lineTo(HITX(),H*0.78);ctx.stroke();
   }
-  // hit line
-  ctx.save();ctx.globalCompositeOperation='lighter';
-  const grd=ctx.createLinearGradient(HITX()-30,0,HITX()+30,0);
-  grd.addColorStop(0,'rgba(120,180,255,0)');grd.addColorStop(1,'rgba(120,180,255,.5)');
-  ctx.fillStyle=grd;ctx.fillRect(HITX()-30,H*0.22,60,H*0.56);ctx.restore();
-  ctx.strokeStyle='rgba(160,200,255,.55)';ctx.lineWidth=3;
-  ctx.beginPath();ctx.moveTo(HITX(),H*0.22);ctx.lineTo(HITX(),H*0.78);ctx.stroke();
 
   if(phase==='practice' || phase==='skilltutorial') drawLaneBands(now);
 
   // enemy = irregular wavy tangle (right) · player = white orb (left)
   if(phase==='intro'||phase==='getready'||phase==='game'||phase==='gameover'){   // arena only in battle-ish phases
-    drawEnemy(SPAWNX()+W*0.04, H*0.5, now, enemyHP/chapterMaxHP*100);
+    drawEnemy(SPAWNX()+W*0.04, H*0.5, now, enemyHP/levelMaxHP*100);
     glowCircle(HITX()-W*0.05, H*0.5, 26+Math.sin(now/400)*3, '#ffffff', 30);
     glowCircle(HITX()-W*0.05, H*0.5, 10, '#ffffff', 14);
   }
@@ -1230,18 +1325,29 @@ function render(now){
   if(skillState.active) drawSkillWindow(now);
 
   // ---- HUD / overlays per phase ----
-  if(phase==='title') drawTitle(now);
-  else if(phase==='chapterselect') drawChapterSelect(now);
+  if(phase==='menu') drawMenu(now);
+  else if(phase==='loadmenu') drawLoad(now);
+  else if(phase==='levelselect') drawLevelSelect(now);
+  else if(phase==='settings') drawSettings(now);
+  else if(phase==='training') drawTraining(now);
+  else if(phase==='cutscene') drawCutscene(now);
+  else if(phase==='getset') drawGetSet(now);
   else if(phase==='practice') drawTester(now);
   else if(phase==='tutorial') drawTutorial(now);
   else if(phase==='skilltutorial') drawSkillTutorial(now);
   else if(phase==='getready') drawGetReady();
   else if(phase==='intro') drawIntro(now);
   else hud(now);   // game + gameover
-  // ---- debug cam: shown in intro/tutorial/practice/gameover; hidden in title/chapterselect/game/getready unless 调试 ----
-  if(cfg.debug || (phase!=='game' && phase!=='getready' && phase!=='title' && phase!=='chapterselect')) drawDebug();
+  // ---- debug cam: shown in intro/tutorial/practice/gameover; hidden on menus/game/getready unless 调试 ----
+  if(cfg.debug || phase==='intro'||phase==='tutorial'||phase==='skilltutorial'||phase==='practice'||phase==='gameover'||phase==='getset') drawDebug();
   ctx.setTransform(1,0,0,1,0,0);
   if(phase==='gameover') drawEnd(now);
+  if(pauseMenuOpen) drawGmenu(now, true);           // pause menu over the frozen battle
+  else if(phase==='game' && crossStart){            // cross-arms hold progress
+    const p=Math.min(1,(performance.now()-crossStart)/1600);
+    ctx.textAlign='center';ctx.fillStyle='rgba(255,210,58,'+(0.4+0.5*p)+')';ctx.font='bold 16px Segoe UI';
+    ctx.fillText((cfg.lang==='en'?'cross-arms pause ':'抱臂暂停 ')+(p*100|0)+'%', cv.width/2, 28);
+  }
 }
 
 function bar(x,y,w,h,frac,col,label){
@@ -1253,7 +1359,7 @@ function bar(x,y,w,h,frac,col,label){
 function hud(now){
   const W=cv.width;
   drawSkillHud(now);
-  bar(W*0.52,104,W*0.40,16,enemyHP/chapterMaxHP,cssCol('--red'),'ENEMY');
+  bar(W*0.52,104,W*0.40,16,enemyHP/levelMaxHP,cssCol('--red'),'ENEMY');
   bar(28,104,W*0.30,16,playerHP/MAX_PLAYER_HP,cssCol('--blue'),'YOU');
   ctx.fillStyle='#fff';ctx.textAlign='left';
   ctx.font='bold 30px Segoe UI';ctx.fillText(score.toString().padStart(6,'0'),28,160);
@@ -1316,14 +1422,14 @@ function drawTutorial(now){
   const W=cv.width,H=cv.height,g=TUTORIAL[tutStep],col=cssCol(g.hand==='left'?'--blue':'--red');
   ctx.textAlign='center';
   ctx.fillStyle='#9fb0e8';ctx.font='bold 24px Segoe UI';
-  ctx.fillText('操作教学', W/2, 40);
+  ctx.fillText(T('tut.title'), W/2, 40);
   ctx.fillStyle='#8a93b8';ctx.font='14px Segoe UI';
-  ctx.fillText('基础动作 '+(tutStep+1)+' / '+TUTORIAL.length, W/2, 64);
+  ctx.fillText(T('tut.progress', tutStep+1, TUTORIAL.length), W/2, 64);
   // colored move name + plain description (matches the cue style you wanted)
   ctx.fillStyle=col;ctx.font='bold 48px Segoe UI';
-  ctx.fillText(g.name, W/2, H*0.30);
+  ctx.fillText(tutName(g), W/2, H*0.30);
   ctx.fillStyle='#e8ecff';ctx.font='22px Segoe UI';
-  ctx.fillText(g.cue, W/2, H*0.30+42);
+  ctx.fillText(tutCue(g), W/2, H*0.30+42);
   // rep dots (need TUT_NEED)
   for(let i=0;i<TUT_NEED;i++){
     ctx.beginPath();ctx.arc(W/2-14+i*28, H*0.30+78, 8, 0, 7);
@@ -1337,7 +1443,7 @@ function drawTutorial(now){
     ctx.globalAlpha=1;
   }
   ctx.fillStyle='#8a93b8';ctx.font='13px Segoe UI';
-  ctx.fillText('对着右下角画面里的「你 + 判定线」做动作 · 成功两次进入下一个', W/2, H-16);
+  ctx.fillText(T('tut.hint'), W/2, H-16);
 }
 function drawSkillTutorial(now){
   const W=cv.width,H=cv.height,slot=['A','B'][skillTut.slotIndex],def=skillDefForSlot(slot);
@@ -1456,49 +1562,381 @@ function drawSkillHud(now){
     ctx.restore();
   });
 }
-function drawTitle(now){
-  const W=cv.width,H=cv.height; ctx.textAlign='center';
-  ctx.save();ctx.shadowColor=cssCol('--blue');ctx.shadowBlur=26;
-  ctx.fillStyle='#eaf0ff';ctx.font='bold 66px Segoe UI';
-  ctx.fillText('MusicFight', W/2, H*0.40);
+/* ============================================================
+   MAIN MENU — clickable (canvas hit-testing fixes the click bug)
+   ============================================================ */
+let menuBtns=[];                 // [{x,y,w,h,action}] rebuilt each menu render
+let mouseX=-1, mouseY=-1;        // last cursor pos in canvas coords (for hover feedback)
+function isMenuPhase(){ return phase==='menu'||phase==='loadmenu'||phase==='levelselect'||phase==='settings'||phase==='training'; }
+function mouseIn(x,y,w,h){ return mouseX>=x&&mouseX<=x+w&&mouseY>=y&&mouseY<=y+h; }
+function canvasXY(ev){
+  const r=cv.getBoundingClientRect();
+  return [ (ev.clientX-r.left)*(cv.width/Math.max(1,r.width)),
+           (ev.clientY-r.top )*(cv.height/Math.max(1,r.height)) ];
+}
+function addBtn(x,y,w,h,action){ menuBtns.push({x,y,w,h,action}); }
+function handleMenuClick(ev){
+  if(!started) return;
+  const [x,y]=canvasXY(ev);
+  if(phase==='cutscene'){ advanceScene(); return; }     // click = next line
+  if(phase==='getset'){ confirmReady(); return; }       // click = confirm ready
+  if(pauseMenuOpen){ for(const b of menuBtns){ if(x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h){ b.action(); return; } } return; }
+  if(isMenuPhase()){
+    for(const b of menuBtns){ if(x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h){ b.action(); return; } }
+    return;
+  }
+  if(gameOver){ if(!trainingMode && win) proceedAfterWin(); else { restart(); toast('↺'); } }   // 胜=继续 / 训练&败=再来
+}
+function doNewGame(){
+  saveData.seenScenes=[]; saveData.lastLevel=0; writeSaveData(saveData);   // 新游戏:从头重看剧情(保留已解锁关卡)
+  trainingMode=false;
+  readyThen(()=>startLevel(0));   // 站好确认 → 序章开场
+}
+
+// labelled rectangular button; registers a hit-box unless disabled
+function panelBtn(label, x, y, w, h, action, o){
+  o=o||{};
+  const hot=!o.disabled && mouseIn(x,y,w,h);
+  ctx.save();
+  ctx.globalAlpha=o.disabled?0.45:1;
+  ctx.fillStyle=o.fill || (hot?'rgba(58,120,255,.24)':'rgba(58,120,255,.10)');
+  ctx.fillRect(x,y,w,h);
+  ctx.strokeStyle=o.stroke || (o.disabled?'rgba(255,255,255,.16)':cssCol('--blue'));
+  ctx.lineWidth=2; ctx.strokeRect(x,y,w,h);
   ctx.restore();
-  ctx.fillStyle='#9fb0e8';ctx.font='20px Segoe UI';
-  ctx.fillText('体感节奏 · 赛博朋克 RPG', W/2, H*0.40+46);
-  ctx.save();ctx.globalAlpha=0.5+0.5*Math.sin(now/350);
-  ctx.fillStyle=cssCol('--gold');ctx.font='bold 22px Segoe UI';
-  ctx.fillText('按任意键 / 点击屏幕  开始', W/2, H*0.66);
+  ctx.textAlign=o.align||'center';
+  const tx=o.align==='left'? x+22 : x+w/2;
+  ctx.fillStyle=o.disabled?'#8a93b8':'#eaf0ff'; ctx.font=o.font||'bold 23px Segoe UI';
+  ctx.fillText(label, tx, y+h/2+(o.sub?-3:8));
+  if(o.sub){ ctx.fillStyle='#9fb0e8'; ctx.font='13px Segoe UI'; ctx.fillText(o.sub, tx, y+h/2+20); }
+  if(!o.disabled) addBtn(x,y,w,h,action);
+}
+function backBtn(target){
+  const x=24,y=22,w=104,h=40, hot=mouseIn(x,y,w,h);
+  ctx.save();ctx.fillStyle=hot?'rgba(58,120,255,.22)':'rgba(255,255,255,.06)';ctx.fillRect(x,y,w,h);
+  ctx.strokeStyle='rgba(255,255,255,.22)';ctx.lineWidth=1.5;ctx.strokeRect(x,y,w,h);ctx.restore();
+  ctx.fillStyle='#cfd6f5';ctx.font='bold 16px Segoe UI';ctx.textAlign='center';ctx.fillText(T('common.back'), x+w/2, y+h/2+6);
+  addBtn(x,y,w,h, ()=>{ phase=target||'menu'; });
+}
+function drawLangPill(x,y){
+  const w=128,h=40,half=w/2;
+  ctx.save();
+  ctx.fillStyle='rgba(255,255,255,.05)';ctx.fillRect(x,y,w,h);
+  ctx.fillStyle='rgba(46,204,113,.28)'; ctx.fillRect(cfg.lang==='zh'?x:x+half, y, half, h);
+  ctx.strokeStyle='rgba(255,255,255,.22)';ctx.lineWidth=1.5;ctx.strokeRect(x,y,w,h);ctx.restore();
+  ctx.textAlign='center';ctx.font='bold 15px Segoe UI';
+  ctx.fillStyle=cfg.lang==='zh'?'#eaf0ff':'#9fb0e8';ctx.fillText('中', x+half/2, y+h/2+6);
+  ctx.fillStyle=cfg.lang==='en'?'#eaf0ff':'#9fb0e8';ctx.fillText('EN', x+half+half/2, y+h/2+6);
+  addBtn(x,y,half,h, ()=>{ cfg.lang='zh'; persistSettings(); });
+  addBtn(x+half,y,half,h, ()=>{ cfg.lang='en'; persistSettings(); });
+}
+function drawMenu(now){
+  menuBtns=[];
+  const W=cv.width,H=cv.height; ctx.textAlign='center';
+  ctx.save();ctx.shadowColor=cssCol('--blue');ctx.shadowBlur=24;
+  ctx.fillStyle='#eaf0ff';ctx.font='bold 58px Segoe UI';ctx.fillText('MusicFight', W/2, H*0.20);ctx.restore();
+  ctx.fillStyle='#9fb0e8';ctx.font='18px Segoe UI';ctx.fillText(T('app.subtitle'), W/2, H*0.20+36);
+  drawLangPill(W-152, 24);
+  const bw=W*0.42, bh=62, x=W/2-bw/2, gap=15; let y=H*0.34;
+  panelBtn(T('menu.new'),      x,y,bw,bh, ()=>doNewGame());          y+=bh+gap;
+  panelBtn(T('menu.load'),     x,y,bw,bh, ()=>{ phase='loadmenu'; }); y+=bh+gap;
+  panelBtn(T('menu.training'), x,y,bw,bh, ()=>openTrainingMenu()); y+=bh+gap;
+  panelBtn(T('menu.settings'), x,y,bw,bh, ()=>{ phase='settings'; }); y+=bh+gap;
+  ctx.textAlign='center';ctx.fillStyle='#8a93b8';ctx.font='13px Segoe UI';ctx.fillText(T('menu.start'), W/2, y+6);
+}
+// a chapter row in the Load screen → opens its level sub-menu
+function chapterCard(ci,x,y,w,h){
+  const ch=CHAPTERS[ci], idxs=levelIndicesOfChapter(ch);
+  const open = !ch.locked && idxs.some(i=>isUnlocked(saveData,i));
+  const allCleared = idxs.length>0 && idxs.every(i=>isCleared(saveData,i));
+  const clearedN = idxs.filter(i=>isCleared(saveData,i)).length;
+  const hot=open&&mouseIn(x,y,w,h);
+  ctx.save();ctx.globalAlpha=open?1:0.5;
+  ctx.fillStyle=open?(hot?'rgba(58,120,255,.22)':'rgba(58,120,255,.10)'):'rgba(255,255,255,.04)';ctx.fillRect(x,y,w,h);
+  ctx.strokeStyle=open?cssCol('--blue'):'rgba(255,255,255,.16)';ctx.lineWidth=2;ctx.strokeRect(x,y,w,h);
+  ctx.textAlign='left';ctx.fillStyle=open?'#eaf0ff':'#8a93b8';ctx.font='bold 20px Segoe UI';
+  ctx.fillText(chTitle(ch,cfg.lang), x+18, y+25);
+  ctx.fillStyle='#9fb0e8';ctx.font='13px Segoe UI';ctx.fillText(chSub(ch,cfg.lang), x+18, y+45);
+  ctx.textAlign='right';ctx.fillStyle=allCleared?cssCol('--gold'):open?cssCol('--green'):'#8a93b8';ctx.font='bold 14px Segoe UI';
+  ctx.fillText(ch.locked?T('chapter.locked'):(allCleared?T('chapter.cleared'):open?(clearedN+'/'+idxs.length+' ▸'):T('chapter.locked')), x+w-18, y+h/2+5);
+  ctx.restore();
+  if(open) addBtn(x,y,w,h, ()=>{ selectedChapter=ci; phase='levelselect'; });
+}
+function drawLoad(now){
+  menuBtns=[];
+  const W=cv.width,H=cv.height; ctx.textAlign='center';
+  ctx.fillStyle='#eaf0ff';ctx.font='bold 30px Segoe UI';ctx.fillText(T('load.title'), W/2, H*0.12);
+  backBtn('menu');
+  const bw=W*0.6, x=W/2-bw/2; let y=H*0.19;
+  const cont=Math.max(0,Math.min(LEVELS.length-1, saveData.lastLevel||0));
+  const hasProg=(saveData.unlockedMax>0)||(saveData.clearedLevels&&saveData.clearedLevels.length>0)||((saveData.lastLevel|0)>0);
+  if(hasProg) panelBtn('▶ '+T('load.continue', LEVELS[cont].no+' '+lvTitle(LEVELS[cont],cfg.lang)), x,y,bw,56, ()=>readyThen(()=>startLevel(cont)), {align:'left', fill:'rgba(46,204,113,.16)', stroke:cssCol('--green')});
+  else        panelBtn('▶ '+T('load.continueNone'), x,y,bw,56, ()=>{}, {align:'left', disabled:true});
+  y+=56+20;
+  ctx.textAlign='left';ctx.fillStyle='#9fb0e8';ctx.font='bold 15px Segoe UI';ctx.fillText(T('load.chapters'), x, y); y+=14;
+  const cardH=56, gap=12;
+  for(let i=0;i<CHAPTERS.length;i++) chapterCard(i, x, y+i*(cardH+gap), bw, cardH);
+}
+// level sub-menu for the selected chapter
+function levelCard(gi,x,y,w,h){
+  const lv=LEVELS[gi], unlocked=isUnlocked(saveData,gi), cleared=isCleared(saveData,gi), hot=unlocked&&mouseIn(x,y,w,h);
+  ctx.save();ctx.globalAlpha=unlocked?1:0.5;
+  ctx.fillStyle=unlocked?(hot?'rgba(58,120,255,.22)':'rgba(58,120,255,.10)'):'rgba(255,255,255,.04)';ctx.fillRect(x,y,w,h);
+  ctx.strokeStyle=unlocked?cssCol('--blue'):'rgba(255,255,255,.16)';ctx.lineWidth=2;ctx.strokeRect(x,y,w,h);
+  ctx.textAlign='left';ctx.fillStyle=unlocked?'#eaf0ff':'#8a93b8';ctx.font='bold 19px Segoe UI';
+  ctx.fillText(lv.no+'  '+lvTitle(lv,cfg.lang), x+16, y+24);
+  ctx.fillStyle='#9fb0e8';ctx.font='12px Segoe UI';ctx.fillText(lvSub(lv,cfg.lang), x+16, y+43);
+  ctx.textAlign='right';ctx.fillStyle=cleared?cssCol('--gold'):unlocked?cssCol('--green'):'#8a93b8';ctx.font='bold 13px Segoe UI';
+  ctx.fillText(cleared?T('chapter.cleared'):unlocked?T('chapter.play'):T('chapter.locked'), x+w-16, y+h/2+5);
+  ctx.restore();
+  if(unlocked) addBtn(x,y,w,h, ()=>readyThen(()=>startLevel(gi)));
+}
+function drawLevelSelect(now){
+  menuBtns=[];
+  const W=cv.width,H=cv.height, ch=CHAPTERS[selectedChapter]; ctx.textAlign='center';
+  ctx.fillStyle='#eaf0ff';ctx.font='bold 28px Segoe UI';ctx.fillText(chTitle(ch,cfg.lang), W/2, H*0.12);
+  ctx.fillStyle='#9fb0e8';ctx.font='14px Segoe UI';ctx.fillText(chSub(ch,cfg.lang), W/2, H*0.12+26);
+  backBtn('loadmenu');
+  const idxs=levelIndicesOfChapter(ch), bw=W*0.6, x=W/2-bw/2, cardH=58, gap=12; let y=H*0.24;
+  for(let k=0;k<idxs.length;k++) levelCard(idxs[k], x, y+k*(cardH+gap), bw, cardH);
+  if(idxs.length===0){ ctx.fillStyle='#8a93b8';ctx.font='16px Segoe UI';ctx.fillText(T('training.soon'), W/2, H*0.5); }
+}
+function langOpt(label, code, x, y, w, h){
+  const sel=cfg.lang===code, hot=mouseIn(x,y,w,h);
+  ctx.save();
+  ctx.fillStyle=sel?'rgba(46,204,113,.24)':(hot?'rgba(58,120,255,.18)':'rgba(58,120,255,.08)');ctx.fillRect(x,y,w,h);
+  ctx.strokeStyle=sel?cssCol('--green'):'rgba(255,255,255,.22)';ctx.lineWidth=2;ctx.strokeRect(x,y,w,h);ctx.restore();
+  ctx.fillStyle=sel?'#eaf0ff':'#9fb0e8';ctx.font='bold 18px Segoe UI';ctx.textAlign='center';ctx.fillText(label, x+w/2, y+h/2+6);
+  addBtn(x,y,w,h, ()=>{ cfg.lang=code; persistSettings(); });
+}
+function drawSettings(now){
+  menuBtns=[];
+  const W=cv.width,H=cv.height; ctx.textAlign='center';
+  ctx.fillStyle='#eaf0ff';ctx.font='bold 30px Segoe UI';ctx.fillText(T('settings.title'), W/2, H*0.12);
+  backBtn();
+  const bw=W*0.6, x=W/2-bw/2; let y=H*0.26;
+  ctx.textAlign='left';ctx.fillStyle='#9fb0e8';ctx.font='bold 17px Segoe UI';ctx.fillText(T('settings.language'), x, y);
+  const pw=130, ph=46, py=y+14;
+  langOpt('中文', 'zh', x, py, pw, ph);
+  langOpt('English', 'en', x+pw+14, py, pw, ph);
+  y=py+ph+42;
+  ctx.textAlign='left';ctx.fillStyle='#9fb0e8';ctx.font='bold 17px Segoe UI';ctx.fillText(T('settings.controls'), x, y);
+  panelBtn('⚙ '+T('settings.controls'), x, y+14, bw, 58, ()=>{ document.getElementById('panel').classList.add('show'); }, {align:'left', sub:T('settings.controlsHint')});
+  ctx.textAlign='center';ctx.fillStyle='#8a93b8';ctx.font='13px Segoe UI';ctx.fillText(T('settings.saved'), W/2, H-26);
+}
+/* ============================================================
+   GESTURE MENU (training song-select + pause menu) + cross-arms pause
+   ============================================================ */
+const TRAINING_SONGS=[
+  {title:'技能测试曲', title_en:'Skill Test',     bgm:'skill_battle_test.mid',                                    bpm:132},
+  {title:'红线内核',   title_en:'Redline Kernel',  bgm:'assets/battle_bgm_dark_cyber_metal_03_redline_kernel.mid', bpm:150},
+  {title:'空铸厂',     title_en:'Null Foundry',    bgm:'assets/battle_bgm_dark_cyber_metal_01_null_foundry.mid',   bpm:138},
+  {title:'黑冰',       title_en:'Black Ice',       bgm:'assets/battle_bgm_dark_cyber_metal_02_black_ice.mid',      bpm:128},
+  {title:'灵魂循环',   title_en:'Soul Loop',       bgm:'assets/musicfight_metal_soul_loop.mid',                   bpm:150},
+];
+function openTrainingMenu(){
+  const items=TRAINING_SONGS.map((s,i)=>({ label:(cfg.lang==='en'&&s.title_en)?s.title_en:s.title, sub:s.bpm+' BPM', danger:true, act:()=>startTraining(i) }));
+  items.push({ label:T('common.back'), act:()=>{ gmenu=null; phase='menu'; } });
+  gmenu={ title:T('training.title'), sub:T('training.pick'), items, idx:0, confirm:false };
+  phase='training';
+}
+function startTraining(i){
+  const s=TRAINING_SONGS[i]; trainingMode=true; gmenu=null;
+  levelMaxHP=MAX_ENEMY_HP; cfg.bpm=s.bpm; cfg.attackGap=60000/cfg.bpm*1.5;
+  loadLevelBgm(s.bgm);
+  readyThen(()=>enterGame());            // 站好确认 → 直接开打(无剧情)
+}
+// ---- pause ----
+function openPauseMenu(){
+  if(pauseMenuOpen||phase!=='game') return;
+  paused=true; if(actx) actx.suspend();          // freeze clock (skill bar/balls/music halt)
+  pauseMenuOpen=true; pauseGestArmed=false;       // require neutral pose before first nav
+  const items = trainingMode
+    ? [ {label:T('pause.resume'), act:closePause},
+        {label:T('pause.songs'),  danger:true, act:()=>{ paused=false; if(actx)actx.resume(); pauseMenuOpen=false; gmenu=null; openTrainingMenu(); }},
+        {label:T('pause.menu'),   danger:true, act:exitToMenu} ]
+    : [ {label:T('pause.resume'),  act:closePause},
+        {label:T('pause.restart'), danger:true, act:restartLevel},
+        {label:T('pause.menu'),    danger:true, act:exitToMenu} ];
+  gmenu={ title:T('pause.title'), sub:null, items, idx:0, confirm:false };
+}
+function closePause(){ pauseMenuOpen=false; gmenu=null; paused=false; if(actx) actx.resume(); }
+function restartLevel(){ pauseMenuOpen=false; gmenu=null; paused=false; if(actx) actx.resume(); enterGame(); }
+function exitToMenu(){ pauseMenuOpen=false; gmenu=null; paused=false; if(actx) actx.resume(); stopAudioPlayback(); trainingMode=false; phase='menu'; }
+function togglePauseMenu(){ if(phase!=='game') return; if(pauseMenuOpen) closePause(); else openPauseMenu(); }
+// ---- gesture-menu navigation (shared) ----
+function gnavUp(){ if(!gmenu) return; if(gmenu.confirm){ gmenu.confirm=false; } else gmenu.idx=(gmenu.idx-1+gmenu.items.length)%gmenu.items.length; }
+function gnavDown(){ if(!gmenu||gmenu.confirm) return; gmenu.idx=(gmenu.idx+1)%gmenu.items.length; }
+function gnavConfirm(){ if(!gmenu) return; if(gmenu.confirm){ const it=gmenu.items[gmenu.idx]; gmenu.confirm=false; it.act(); } else { const it=gmenu.items[gmenu.idx]; if(it.danger) gmenu.confirm=true; else it.act(); } }
+function gmenuClickPick(i){ if(!gmenu||gmenu.confirm) return; gmenu.idx=i; const it=gmenu.items[i]; if(it.danger) gmenu.confirm=true; else it.act(); }
+// ---- pose gestures (work even when the clock is frozen) ----
+function detectCrossArms(lm, body){
+  const lw=lm[L.lwri], rw=lm[L.rwri];
+  const okV=(lw.visibility??1)>0.5 && (rw.visibility??1)>0.5;
+  const crossed=(rw.x-lw.x)>0.03;                                   // wrists swapped → arms crossed (raw image coords)
+  const chest = lw.y>body.shoY-0.05 && lw.y<body.hipY+0.02 && rw.y>body.shoY-0.05 && rw.y<body.hipY+0.02;
+  const near = Math.abs(lw.x-body.cx)<body.shoW && Math.abs(rw.x-body.cx)<body.shoW;
+  const wall=performance.now();
+  if(okV&&crossed&&chest&&near){ if(!crossStart) crossStart=wall; else if(wall-crossStart>=1600){ crossStart=0; openPauseMenu(); } }
+  else crossStart=0;
+}
+function pauseNav(lm, body){
+  const lw=lm[L.lwri], rw=lm[L.rwri];
+  const up   = lw.y<body.shoY-0.04 && rw.y<body.shoY-0.04;          // both hands above shoulders
+  const down = lw.y>body.hipY+0.02 && rw.y>body.hipY+0.02;          // both hands below hips
+  const cross= (rw.x-lw.x)>0.03 && lw.y>body.shoY-0.05 && lw.y<body.hipY+0.05 && rw.y>body.shoY-0.05 && rw.y<body.hipY+0.05;
+  const wall=performance.now();
+  if(!up&&!down&&!cross){ pauseGestArmed=true; return; }            // neutral → re-arm
+  if(!pauseGestArmed || wall-pauseGestT<500) return;
+  pauseGestArmed=false; pauseGestT=wall;
+  if(cross) gnavConfirm(); else if(up) gnavUp(); else if(down) gnavDown();
+}
+// ---- shared gesture-menu renderer (training: dim=false · pause: dim=true over frozen game) ----
+function drawGmenu(now, dim){
+  menuBtns=[];
+  const W=cv.width,H=cv.height;
+  if(dim){ ctx.fillStyle='rgba(4,5,12,.74)'; ctx.fillRect(0,0,W,H); }
+  ctx.textAlign='center';
+  ctx.fillStyle='#eaf0ff';ctx.font='bold 34px Segoe UI';ctx.fillText(gmenu.title, W/2, H*0.15);
+  if(gmenu.sub){ ctx.fillStyle='#9fb0e8';ctx.font='15px Segoe UI';ctx.fillText(gmenu.sub, W/2, H*0.15+28); }
+  const bw=W*0.5, x=W/2-bw/2, bh=56, gap=11; let y=H*0.26;
+  for(let i=0;i<gmenu.items.length;i++){
+    const it=gmenu.items[i], sel=i===gmenu.idx, hot=mouseIn(x,y,bw,bh);
+    ctx.save();
+    ctx.fillStyle = sel?'rgba(46,204,113,.22)':hot?'rgba(58,120,255,.16)':'rgba(58,120,255,.08)';ctx.fillRect(x,y,bw,bh);
+    ctx.strokeStyle = sel?cssCol('--green'):'rgba(255,255,255,.22)';ctx.lineWidth=sel?3:1.5;ctx.strokeRect(x,y,bw,bh);
+    ctx.restore();
+    ctx.textAlign='center';ctx.fillStyle=sel?'#eaf0ff':'#cfd6f5';ctx.font='bold 21px Segoe UI';
+    ctx.fillText(it.label, x+bw/2, y+(it.sub?bh/2-2:bh/2+7));
+    if(it.sub){ ctx.fillStyle='#9fb0e8';ctx.font='12px Segoe UI';ctx.fillText(it.sub, x+bw/2, y+bh/2+18); }
+    (function(idx){ addBtn(x,y,bw,bh, ()=>gmenuClickPick(idx)); })(i);
+    y+=bh+gap;
+  }
+  ctx.fillStyle='#8a93b8';ctx.font='13px Segoe UI';ctx.fillText(T('gmenu.hint'), W/2, H*0.93);
+  if(gmenu.confirm){
+    const it=gmenu.items[gmenu.idx];
+    ctx.fillStyle='rgba(4,5,12,.86)';ctx.fillRect(W*0.22,H*0.38,W*0.56,H*0.24);
+    ctx.strokeStyle=cssCol('--gold');ctx.lineWidth=2;ctx.strokeRect(W*0.22,H*0.38,W*0.56,H*0.24);
+    ctx.textAlign='center';ctx.fillStyle='#eaf0ff';ctx.font='bold 24px Segoe UI';
+    ctx.fillText(T('gmenu.confirm')+' '+it.label, W/2, H*0.38+54);
+    const byw=150,byh=48,byy=H*0.38+86, yesX=W/2-byw-12, noX=W/2+12;
+    ctx.fillStyle='rgba(46,204,113,.22)';ctx.fillRect(yesX,byy,byw,byh);ctx.strokeStyle=cssCol('--green');ctx.lineWidth=2;ctx.strokeRect(yesX,byy,byw,byh);
+    ctx.fillStyle='rgba(255,80,80,.16)';ctx.fillRect(noX,byy,byw,byh);ctx.strokeStyle=cssCol('--red');ctx.strokeRect(noX,byy,byw,byh);
+    ctx.fillStyle='#eaf0ff';ctx.font='bold 17px Segoe UI';
+    ctx.fillText(T('gmenu.yes'), yesX+byw/2, byy+byh/2+6);
+    ctx.fillText(T('gmenu.no'),  noX+byw/2,  byy+byh/2+6);
+    addBtn(yesX,byy,byw,byh, ()=>{ const it2=gmenu.items[gmenu.idx]; gmenu.confirm=false; it2.act(); });
+    addBtn(noX,byy,byw,byh, ()=>{ gmenu.confirm=false; });
+  }
+}
+function drawTraining(now){
+  if(gmenu){ drawGmenu(now, false); return; }
+  menuBtns=[];
+  const W=cv.width,H=cv.height; ctx.textAlign='center';
+  ctx.fillStyle='#eaf0ff';ctx.font='bold 30px Segoe UI';ctx.fillText(T('training.title'), W/2, H*0.32);
+  backBtn('menu');
+}
+
+/* ============================================================
+   CUTSCENE (story) — neon city bg + orb/shard speakers + dialogue
+   ============================================================ */
+function wrapText(text, x, y, maxW, lineH){
+  const tokens=String(text).split(/(\s+)/); let line='', yy=y;
+  const flush=()=>{ ctx.fillText(line, x, yy); line=''; yy+=lineH; };
+  for(const tk of tokens){
+    if(ctx.measureText(tk).width>maxW){           // long run with no spaces (CJK) → break by char
+      for(const ch of tk){ if(ctx.measureText(line+ch).width>maxW && line) flush(); line+=ch; }
+      continue;
+    }
+    if(ctx.measureText(line+tk).width>maxW && line) flush();
+    line+=tk;
+  }
+  if(line.length) ctx.fillText(line, x, yy);
+}
+function drawCityBg(now){
+  const W=cv.width,H=cv.height;
+  const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#0a0618'); g.addColorStop(0.55,'#140a2a'); g.addColorStop(1,'#1b0b2e');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  ctx.save();ctx.globalCompositeOperation='lighter';
+  const gg=ctx.createLinearGradient(0,H*0.5,0,H*0.8);
+  gg.addColorStop(0,'rgba(255,40,140,0.16)'); gg.addColorStop(1,'rgba(40,120,255,0)');
+  ctx.fillStyle=gg; ctx.fillRect(0,H*0.5,W,H*0.3); ctx.restore();
+  const layers=[{base:0.80,col:'#0c0a20',hh:0.30,step:130,seed:7},{base:0.86,col:'#070512',hh:0.44,step:96,seed:13}];
+  for(const L of layers){
+    let x=-20, i=L.seed>>>0;
+    while(x<W+40){
+      i=(i*1103515245+12345)&0x7fffffff;
+      const w=L.step*(0.55+(i%1000)/1000*0.7);
+      const h=H*L.hh*(0.45+((i>>5)%1000)/1000*0.7);
+      const yTop=H*L.base-h;
+      ctx.fillStyle=L.col; ctx.fillRect(x,yTop,w-8,H-yTop);
+      ctx.save();ctx.globalCompositeOperation='lighter';
+      for(let wy=yTop+12; wy<H*L.base-10; wy+=16)
+        for(let wx=x+8; wx<x+w-16; wx+=14)
+          if(((wx*7+wy*13+i)>>3)%5===0){
+            ctx.fillStyle=((wx+wy)>>2)%2 ? 'rgba(120,200,255,0.45)' : 'rgba(255,120,200,0.4)';
+            ctx.fillRect(wx,wy,4,6);
+          }
+      ctx.restore();
+      x+=w;
+    }
+  }
+}
+function drawSpeaker(who, x, y, now){
+  ctx.save(); ctx.globalCompositeOperation='lighter';
+  if(who==='hero'){
+    const r=48+Math.sin(now/300)*3;
+    const g=ctx.createRadialGradient(x,y,4,x,y,r);
+    g.addColorStop(0,'rgba(255,255,255,0.95)');g.addColorStop(0.5,'rgba(200,220,255,0.5)');g.addColorStop(1,'rgba(120,160,255,0)');
+    ctx.fillStyle=g;ctx.beginPath();ctx.arc(x,y,r,0,7);ctx.fill();
+  } else if(who==='frag'){
+    const n=6, R=40;
+    for(let k=0;k<n;k++){
+      const a=now/700 + k*(Math.PI*2/n), rr=R*(0.5+0.5*((k%3)/2));
+      const px=x+Math.cos(a)*rr, py=y+Math.sin(a*1.3)*rr*0.7, s=8+Math.sin(now/200+k)*2;
+      ctx.fillStyle=k%2?'rgba(120,230,255,0.7)':'rgba(190,120,255,0.7)';
+      ctx.beginPath();ctx.moveTo(px,py-s);ctx.lineTo(px+s,py+s);ctx.lineTo(px-s,py+s);ctx.closePath();ctx.fill();
+    }
+    ctx.fillStyle='rgba(220,240,255,0.9)';ctx.beginPath();ctx.arc(x,y,6,0,7);ctx.fill();
+  }
   ctx.restore();
 }
-function drawChapterSelect(now){
+function drawCutscene(now){
+  if(!scene){ phase='menu'; return; }
+  const W=cv.width,H=cv.height;
+  drawCityBg(now);
+  const line=scene.data.lines[Math.min(sceneIdx, scene.data.lines.length-1)], who=line.who;
+  if(who==='hero') drawSpeaker('hero', W*0.30, H*0.42, now);
+  else if(who==='frag') drawSpeaker('frag', W*0.70, H*0.42, now);
+  const bx=W*0.12, bw=W*0.76, by=H*0.66, bh=H*0.24;
+  ctx.save();ctx.fillStyle='rgba(6,7,18,0.82)';ctx.fillRect(bx,by,bw,bh);
+  ctx.strokeStyle='rgba(120,160,255,0.5)';ctx.lineWidth=2;ctx.strokeRect(bx,by,bw,bh);ctx.restore();
+  const nm=speakerName(who,cfg.lang);
+  if(nm){ ctx.textAlign='left';ctx.font='bold 18px Segoe UI';ctx.fillStyle=who==='hero'?'#dfe9ff':'#bda6ff';ctx.fillText(nm, bx+24, by+30); }
+  ctx.textAlign='left';ctx.fillStyle=who==='narr'?'#9fb0e8':'#eef3ff';ctx.font=who==='narr'?'italic 22px Segoe UI':'22px Segoe UI';
+  wrapText(locLine(line,cfg.lang), bx+24, by+(nm?64:44), bw-48, 32);
+  ctx.textAlign='right';ctx.fillStyle='#6f7aa5';ctx.font='12px Segoe UI';ctx.fillText((sceneIdx+1)+' / '+scene.data.lines.length, bx+bw-18, by+bh-14);
+  ctx.textAlign='center';ctx.fillStyle='#8a93b8';ctx.font='13px Segoe UI';ctx.globalAlpha=0.6+0.4*Math.sin(now/350);
+  ctx.fillText(cfg.lang==='en'?'both fists down = next · both up = back · (click/space)':'双手同时下击 = 下一句 · 双手上击 = 上一句 · (点击/空格)', W/2, H*0.62);
+  ctx.globalAlpha=1;
+}
+function drawGetSet(now){
   const W=cv.width,H=cv.height; ctx.textAlign='center';
-  ctx.fillStyle='#9fb0e8';ctx.font='bold 26px Segoe UI';
-  ctx.fillText('选择章节', W/2, H*0.14);
-  ctx.fillStyle='#8a93b8';ctx.font='14px Segoe UI';
-  ctx.fillText('按数字键 1–'+CHAPTERS.length+' 选择已解锁的章节', W/2, H*0.14+26);
-  const cardW=W*0.6, cardH=70, x=W/2-cardW/2, y0=H*0.26, gap=16;
-  for(let i=0;i<CHAPTERS.length;i++){
-    const ch=CHAPTERS[i], y=y0+i*(cardH+gap), unlocked=isUnlocked(saveData,i), cleared=isCleared(saveData,i);
-    ctx.save();ctx.globalAlpha=unlocked?1:0.45;
-    ctx.fillStyle=unlocked?'rgba(58,120,255,.10)':'rgba(255,255,255,.04)';ctx.fillRect(x,y,cardW,cardH);
-    ctx.strokeStyle=unlocked?cssCol('--blue'):'rgba(255,255,255,.16)';ctx.lineWidth=2;ctx.strokeRect(x,y,cardW,cardH);
-    ctx.textAlign='left';
-    ctx.fillStyle=unlocked?'#eaf0ff':'#8a93b8';ctx.font='bold 22px Segoe UI';
-    ctx.fillText((i+1)+'.  '+ch.title, x+22, y+33);
-    ctx.fillStyle='#9fb0e8';ctx.font='14px Segoe UI';
-    ctx.fillText(ch.subtitle, x+22, y+56);
-    ctx.textAlign='right';
-    ctx.fillStyle=cleared?cssCol('--gold'):unlocked?cssCol('--green'):'#8a93b8';ctx.font='bold 15px Segoe UI';
-    ctx.fillText(cleared?'已通关 ★':unlocked?'可挑战':'未解锁',x+cardW-22,y+41);
-    ctx.restore();
-  }
-  ctx.textAlign='center';ctx.fillStyle='#8a93b8';ctx.font='13px Segoe UI';
-  ctx.fillText('通关后自动解锁下一章并存档', W/2, H-24);
+  ctx.fillStyle='#eaf0ff';ctx.font='bold 40px Segoe UI';ctx.fillText(T('getset.loading'), W/2, H*0.26);
+  ctx.fillStyle='#cfd6f5';ctx.font='22px Segoe UI';
+  ctx.fillText(T('getset.stand1'), W/2, H*0.40);
+  ctx.fillText(T('getset.stand2'), W/2, H*0.40+34);
+  ctx.save();ctx.globalAlpha=0.55+0.45*Math.sin(now/350);
+  ctx.fillStyle=cssCol('--green');ctx.font='bold 26px Segoe UI';ctx.fillText(T('getset.confirm'), W/2, H*0.62);
+  ctx.restore();
+  ctx.fillStyle='#8a93b8';ctx.font='13px Segoe UI';ctx.fillText(T('getset.hint'), W/2, H*0.62+30);
 }
 function drawGetReady(){
   const W=cv.width,H=cv.height,e=performance.now()-getReadyWall;
   let big,small='';
-  if(e<1000){ big='准备出击！'; small='摆好架势，举起双拳'; }
-  else { const n=5-Math.floor((e-1000)/1000); big = n>=1?String(n):'开始！'; }
+  if(e<1000){ big=T('getready.prompt'); small=T('getready.sub'); }
+  else { const n=5-Math.floor((e-1000)/1000); big = n>=1?String(n):T('getready.go'); }
   ctx.textAlign='center';
   ctx.fillStyle=cssCol('--gold');ctx.font='bold 92px Segoe UI';
   ctx.fillText(big, W/2, H/2+24);
@@ -1513,20 +1951,20 @@ function drawMenuDots(now, yy){
     ctx.fillStyle = on?cssCol(side==='left'?'--blue':'--red'):'rgba(255,255,255,.18)';ctx.fill();
   }
   ctx.fillStyle='#8a93b8';ctx.font='12px Segoe UI';ctx.textAlign='center';
-  ctx.fillText('左右拳要打出同一方向', W/2, yy+26);
+  ctx.fillText(T('menu.dots'), W/2, yy+26);
 }
 function drawIntro(now){
   const W=cv.width,H=cv.height;
   ctx.textAlign='center';
   ctx.fillStyle='#e8ecff';ctx.font='bold 32px Segoe UI';
-  ctx.fillText('战斗即将开始 — 请双手抱拳', W/2, H*0.28);
+  ctx.fillText(T('intro.guard'), W/2, H*0.28);
   ctx.fillStyle='#9fb0e8';ctx.font='22px Segoe UI';
-  ctx.fillText('要先进入操作教学吗？', W/2, H*0.28+42);
+  ctx.fillText(T('intro.ask'), W/2, H*0.28+42);
   ctx.font='bold 26px Segoe UI';
   ctx.fillStyle=cssCol('--green');
-  ctx.fillText('▲ 双拳上击 → 进入教学', W/2, H*0.28+104);
+  ctx.fillText(T('intro.yes'), W/2, H*0.28+104);
   ctx.fillStyle='#cfd6f5';
-  ctx.fillText('▼ 双拳下击 → 跳过', W/2, H*0.28+146);
+  ctx.fillText(T('intro.skip'), W/2, H*0.28+146);
   drawMenuDots(now, H*0.28+196);
 }
 function drawDebug(){
@@ -1587,14 +2025,16 @@ function drawEnd(now){
   ctx.textAlign='center';
   ctx.fillStyle=win?cssCol('--gold'):cssCol('--red');
   ctx.font='bold 60px Segoe UI';
-  ctx.fillText(win?'胜利 ! VICTORY':'失败 DEFEAT',cv.width/2,cv.height/2-70);
+  ctx.fillText(win?T('over.victory'):T('over.defeat'),cv.width/2,cv.height/2-70);
   ctx.fillStyle='#cfd6f5';ctx.font='22px Segoe UI';
-  ctx.fillText(`分数 ${score} · 最大连击 ${maxCombo} · P${stats.perfect} G${stats.good} M${stats.miss}`,cv.width/2,cv.height/2-22);
-  ctx.fillStyle=cssCol('--green');ctx.font='bold 28px Segoe UI';
-  ctx.fillText('▲ 双拳上击 — 再来一局',cv.width/2,cv.height/2+34);
-  drawMenuDots(now, cv.height/2+74);
-  ctx.fillStyle='#8a93b8';ctx.font='14px Segoe UI';
-  ctx.fillText('(也可按 R / 点击屏幕)',cv.width/2,cv.height/2+118);
+  ctx.fillText(T('over.stats', score, maxCombo, stats.perfect, stats.good, stats.miss),cv.width/2,cv.height/2-22);
+  ctx.fillStyle=cssCol('--green');ctx.font='bold 26px Segoe UI';
+  ctx.fillText(win?T('over.continue'):T('over.replay'),cv.width/2,cv.height/2+30);
+  ctx.fillStyle='#cfd6f5';ctx.font='bold 22px Segoe UI';
+  ctx.fillText(T('over.select'),cv.width/2,cv.height/2+66);
+  drawMenuDots(now, cv.height/2+104);
+  ctx.fillStyle='#8a93b8';ctx.font='13px Segoe UI';
+  ctx.fillText(cfg.lang==='en'?'(or click / R)':'(也可点击 / 按 R)',cv.width/2,cv.height/2+142);
 }
 
 /* ============================================================
@@ -1638,7 +2078,9 @@ async function start(){
   resetGame();
   t0 = actx.currentTime*1000 + 300;   // small lead so clock is positive
   saveData = loadSaveData();
-  phase = cfg.testMode ? 'practice' : 'title';      // normal start = title -> chapter select
+  applySavedSettings(saveData);                       // restore language + saved control tuning
+  syncUI();
+  phase = cfg.testMode ? 'practice' : 'menu';         // normal start = main menu
   tutStep=0; tutReps=0; tutFlash=null; tutHoldUntil=0;
   started=true; overlay.style.display='none';
 }
@@ -1651,23 +2093,37 @@ function restart(){
   stopAudioPlayback();
   resetGame();
   if(actx) t0=actx.currentTime*1000+300;
-  phase = cfg.testMode ? 'practice' : 'intro';
+  phase = cfg.testMode ? 'practice' : 'menu';        // R / restart → back to main menu
   tutStep=0; tutReps=0; tutFlash=null; tutHoldUntil=0;
   skillTut={slotIndex:0,mode:'trigger',seqIndex:0,trigger:{left:null,right:null},flash:null};
 }
 
 startBtn.addEventListener('click',start);
 document.getElementById('restartBtn').addEventListener('click',()=>{ if(actx){ restart(); toast('已重新开始 ↺'); } });
-cv.addEventListener('click',()=>{ if(!started) return; if(phase==='title'){ phase='chapterselect'; return; } if(gameOver){ restart(); toast('已重新开始 ↺'); } });
+cv.addEventListener('click', handleMenuClick);
+cv.addEventListener('mousemove', ev=>{ const [x,y]=canvasXY(ev); mouseX=x; mouseY=y; });
 document.getElementById('gear').addEventListener('click',()=>document.getElementById('panel').classList.toggle('show'));
 document.getElementById('loadMusicBtn').addEventListener('click',()=>document.getElementById('musicFile').click());
 document.getElementById('musicFile').addEventListener('change',e=>{ if(e.target.files[0]&&actx) loadSong(e.target.files[0]); else if(e.target.files[0]) {toast('请先点击开始');} });
 
+function togglePause(){          // Space — opens/closes the pause menu (which freezes the clock)
+  if(phase!=='game') return;
+  if(pauseMenuOpen) closePause(); else openPauseMenu();
+}
 window.addEventListener('keydown',e=>{
-  if(started && phase==='title'){ phase='chapterselect'; return; }
-  if(started && phase==='chapterselect'){ const n=parseInt(e.key,10); if(n>=1 && n<=CHAPTERS.length && isUnlocked(saveData,n-1)) startChapter(n-1); return; }
+  if(started && phase==='getset' && (e.code==='Space'||e.code==='Enter')){ e.preventDefault(); confirmReady(); return; }
+  if(started && phase==='cutscene' && (e.code==='ArrowUp'||e.code==='ArrowLeft')){ e.preventDefault(); sceneBack(); return; }
+  if(started && phase==='cutscene' && (e.code==='Space'||e.code==='Enter'||e.code==='ArrowRight'||e.code==='ArrowDown')){ e.preventDefault(); advanceScene(); return; }
+  if(started && (phase==='training' || pauseMenuOpen)){
+    if(e.code==='ArrowUp'){ e.preventDefault(); gnavUp(); return; }
+    if(e.code==='ArrowDown'){ e.preventDefault(); gnavDown(); return; }
+    if(e.code==='Enter'){ e.preventDefault(); gnavConfirm(); return; }
+    if(e.code==='Escape'){ e.preventDefault(); if(pauseMenuOpen) closePause(); else { gmenu=null; phase='menu'; } return; }
+  }
+  if(started && e.code==='Escape' && phase==='levelselect'){ phase='loadmenu'; return; }
+  if(started && e.code==='Escape' && (phase==='loadmenu'||phase==='settings')){ phase='menu'; return; }
   if(e.code==='KeyD'){cfg.debug=!cfg.debug;syncUI();}
-  else if(e.code==='Space'){e.preventDefault();paused=!paused;toast(paused?'已暂停':'继续');}
+  else if(e.code==='Space'){e.preventDefault();togglePause();}
   else if(e.code==='KeyR'&&started){restart();}
 });
 
@@ -1675,10 +2131,11 @@ window.addEventListener('keydown',e=>{
 function bindRange(id,key,valId,fmt){
   const el=document.getElementById(id);
   el.addEventListener('input',()=>{cfg[key]=parseFloat(el.value);document.getElementById(valId).textContent=fmt?fmt(cfg[key]):cfg[key];});
+  el.addEventListener('change', persistSettings);   // save control tuning when the slider is released
 }
 bindRange('cfgTrig','triggerLevel','vTrig',v=>v.toFixed(1));
 document.getElementById('cfgTrig').addEventListener('input',()=>{cfg.resetLevel=cfg.triggerLevel*0.6;});
-document.getElementById('cfgTest').addEventListener('change',e=>{cfg.testMode=e.target.value==='1'; if(started){ stopAudioPlayback(); resetGame(); if(actx)t0=actx.currentTime*1000+300; phase=cfg.testMode?'practice':'intro'; tutStep=0; tutReps=0; tutFlash=null; tutHoldUntil=0; skillTut={slotIndex:0,mode:'trigger',seqIndex:0,trigger:{left:null,right:null},flash:null}; }});
+document.getElementById('cfgTest').addEventListener('change',e=>{cfg.testMode=e.target.value==='1'; if(started){ stopAudioPlayback(); resetGame(); if(actx)t0=actx.currentTime*1000+300; phase=cfg.testMode?'practice':'menu'; tutStep=0; tutReps=0; tutFlash=null; tutHoldUntil=0; skillTut={slotIndex:0,mode:'trigger',seqIndex:0,trigger:{left:null,right:null},flash:null}; }});
 bindRange('cfgSmooth','minCutoff','vSmooth',v=>v.toFixed(1));
 bindRange('cfgLineHigh','lineHigh','vLineHigh',v=>v.toFixed(2));
 bindRange('cfgLineLow','lineLow','vLineLow',v=>v.toFixed(2));
@@ -1688,11 +2145,11 @@ bindRange('cfgBpm','bpm','vBpm');
 bindRange('cfgApproach','approach','vApproach');
 bindRange('cfgCal','calibration','vCal');
 bindRange('cfgWin','goodWindow','vWin');
-document.getElementById('cfgMode').addEventListener('change',e=>cfg.mode=e.target.value);
+document.getElementById('cfgMode').addEventListener('change',e=>{cfg.mode=e.target.value; persistSettings();});
 document.getElementById('cfgSkillA').addEventListener('change',e=>{equippedSkills.A=e.target.value;});
 document.getElementById('cfgSkillB').addEventListener('change',e=>{equippedSkills.B=e.target.value;});
-document.getElementById('crossBtn').addEventListener('click',e=>{cfg.requireCross=!cfg.requireCross;e.target.classList.toggle('on',cfg.requireCross);e.target.textContent=cfg.requireCross?'过线必须 ✓':'过线必须';});
-document.getElementById('mirrorBtn').addEventListener('click',e=>{cfg.mirror=!cfg.mirror;e.target.classList.toggle('on',cfg.mirror);e.target.textContent=cfg.mirror?'镜像 ✓':'镜像';});
+document.getElementById('crossBtn').addEventListener('click',e=>{cfg.requireCross=!cfg.requireCross;e.target.classList.toggle('on',cfg.requireCross);e.target.textContent=cfg.requireCross?'过线必须 ✓':'过线必须'; persistSettings();});
+document.getElementById('mirrorBtn').addEventListener('click',e=>{cfg.mirror=!cfg.mirror;e.target.classList.toggle('on',cfg.mirror);e.target.textContent=cfg.mirror?'镜像 ✓':'镜像'; persistSettings();});
 document.getElementById('dbgBtn').addEventListener('click',e=>{cfg.debug=!cfg.debug;e.target.classList.toggle('on',cfg.debug);e.target.textContent=cfg.debug?'调试叠加 ✓':'调试叠加';});
 
 function syncUI(){

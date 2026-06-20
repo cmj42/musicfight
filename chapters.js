@@ -1,19 +1,40 @@
-// chapters.js — chapter / stage definitions (data-driven; grow this list as the game expands)
-// Theme: "在要删除你的系统里坚持我是谁、我爱谁" — enemies go from outside (people) to inside (yourself).
+// chapters.js — 章节 (Chapter) → 关卡 (Level) 结构. 数据驱动,逐关解锁/存档.
+// 主题:"在要删除你的系统里坚持我是谁、我爱谁" — 敌人由外(别人)到内(自己).
+// 进度以 LEVELS 的「下标」为准:unlockedMax / clearedLevels / lastLevel 都是 index.
+
 export const CHAPTERS = [
-  {
-    id:'ch1', title:'第一章 · 公司黑客', subtitle:'外面的人在追你',
-    enemyHP:200, bgm:'skill_battle_test.mid',
-    intro:'「他们追上来了。先别管为什么——动起来。」',
-  },
-  {
-    id:'ch2', title:'第二章 · 杀毒进程', subtitle:'冷的清理程序，不讲道理',
-    enemyHP:300, bgm:'skill_battle_test.mid',
-    intro:'「这个不跟你谈。它只是执行删除。」',
-  },
-  {
-    id:'ch3', title:'第三章 · 你的另一面', subtitle:'在你自己的歌里',
-    enemyHP:380, bgm:'skill_battle_test.mid',
-    intro:'「这次的对手……是你没跑完的那一版。」',
-  },
+  { id:'prologue', title:'序章', subtitle:'他们在追你', title_en:'Prologue', subtitle_en:'They are hunting you',
+    levels:['p0','p1','p2','p3'] },
+  // 后续章节(coming soon,占位锁定):
+  { id:'ch1', title:'第一章', subtitle:'敬请期待', title_en:'Chapter 1', subtitle_en:'Coming soon',
+    levels:[], locked:true },
 ];
+
+export const LEVELS = [
+  { id:'p0', no:'0-0', title:'觉醒之战', subtitle:'先学会出拳', title_en:'Awakening', subtitle_en:'Learn to punch',
+    bgm:'skill_battle_test.mid',                                    bpm:132, enemyHP:200,
+    tutorial:true, pre:'opening', post:'after_first' },
+  { id:'p1', no:'0-1', title:'红线内核', subtitle:'追兵压上', title_en:'Redline Kernel', subtitle_en:'The chase closes in',
+    bgm:'assets/battle_bgm_dark_cyber_metal_03_redline_kernel.mid', bpm:150, enemyHP:240 },
+  { id:'p2', no:'0-2', title:'空铸厂',   subtitle:'冷的清理程序', title_en:'Null Foundry', subtitle_en:'A cold purge process',
+    bgm:'assets/battle_bgm_dark_cyber_metal_01_null_foundry.mid',   bpm:138, enemyHP:300 },
+  { id:'p3', no:'0-3', title:'黑冰',     subtitle:'防火墙撕开', title_en:'Black Ice', subtitle_en:'Firewall breach',
+    bgm:'assets/battle_bgm_dark_cyber_metal_02_black_ice.mid',      bpm:128, enemyHP:360, post:'prologue_end' },
+];
+
+// ---- lookups ----
+export function levelIndexById(id){ return LEVELS.findIndex(l=>l.id===id); }
+export function levelById(id){ return LEVELS.find(l=>l.id===id) || null; }
+export function chapterOfLevel(idx){             // which chapter a level index belongs to
+  const id = LEVELS[idx] && LEVELS[idx].id;
+  return CHAPTERS.find(c=>c.levels.includes(id)) || null;
+}
+export function levelIndicesOfChapter(ch){       // [global LEVELS indices] for a chapter
+  return (ch.levels||[]).map(levelIndexById).filter(i=>i>=0);
+}
+
+// ---- language-aware labels ----
+export function chTitle(ch, lang){ return (lang==='en' && ch.title_en) ? ch.title_en : ch.title; }
+export function chSub(ch, lang){ return (lang==='en' && ch.subtitle_en) ? ch.subtitle_en : ch.subtitle; }
+export function lvTitle(lv, lang){ return (lang==='en' && lv.title_en) ? lv.title_en : lv.title; }
+export function lvSub(lv, lang){ return (lang==='en' && lv.subtitle_en) ? lv.subtitle_en : lv.subtitle; }
