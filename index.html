@@ -100,13 +100,17 @@
   <h3>技能 Skills</h3>
   <div class="row"><label>A 槽</label>
     <select id="cfgSkillA">
-      <option value="rupture">过载断层 / 伤害</option>
-      <option value="repair">回声修复 / 回血</option>
+      <option value="pyre">燔 / 伤害</option>
+      <option value="tether">挽留 / 回血</option>
+      <option value="effigy">拟生 / 构造</option>
+      <option value="severance">断线 / 破控</option>
     </select></div>
   <div class="row"><label>B 槽</label>
     <select id="cfgSkillB">
-      <option value="repair">回声修复 / 回血</option>
-      <option value="rupture">过载断层 / 伤害</option>
+      <option value="tether">挽留 / 回血</option>
+      <option value="pyre">燔 / 伤害</option>
+      <option value="effigy">拟生 / 构造</option>
+      <option value="severance">断线 / 破控</option>
     </select></div>
   <div class="tip">MIDI 只给 A/B 两条技能触发轨；这里决定触发轨到点时实际使用哪个技能音色和效果。</div>
 
@@ -131,7 +135,7 @@
 <script type="module">
 import { PoseLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
 import { loadSaveData, writeSaveData, markCleared, isUnlocked, isCleared, defaultSave, markSceneSeen, isSceneSeen } from './save.js';
-import { CHAPTERS, LEVELS, levelIndexById, levelById, chapterOfLevel, levelIndicesOfChapter, chTitle, chSub, lvTitle, lvSub } from './chapters.js';
+import { CHAPTERS, LEVELS, levelIndexById, levelById, chapterOfLevel, levelIndicesOfChapter, chTitle, chSub, lvTitle, lvSub, lvHint } from './chapters.js';
 import { SCENES, locLine, speakerName } from './story.js';
 import { t as i18nT } from './i18n.js';
 
@@ -536,7 +540,7 @@ function scheduleDrum(ev,time){
 }
 function scheduleSkillMidiCue(slot,time,dur,velocity){
   const def=skillDefForSlot(slot), vel=Math.pow(velocity/127,1.05);
-  if(def.id==='repair'){
+  if(def.effect && def.effect.type==='heal'){
     scheduleTone(time,659.25,0.16,0.052*vel,'triangle',0.22,5200);
     scheduleTone(time+0.07,880,0.18,0.044*vel,'sine',0.18,6200);
     scheduleTone(time+0.15,1174.66,0.22,0.035*vel,'triangle',0.26,7000);
@@ -666,13 +670,20 @@ let trainingMode=false;                 // true = free training battle (no story
 let gmenu=null;                         // active gesture menu (pause / training song-select)
 let pauseMenuOpen=false;                // pause overlay is up (game frozen behind it)
 let crossStart=0, pauseGestArmed=true, pauseGestT=0;  // cross-arms hold + pause-nav debounce (wall-clock)
+let noSkills=false;                     // true = this battle has no skills (序章技能未解锁)
+let battleHint='', hintUntil=0;         // brief on-screen hint at battle start (wall-clock)
+let stateReturn=null;                   // where the 状态/自检 screen returns to
+let winAutoAt=0;                         // story win auto-advances at this wall-clock time (no menu)
 
 function startLevel(idx){
   if(idx<0 || idx>=LEVELS.length){ phase='menu'; return; }   // ran past the chapter end
   currentLevel=idx;
   const lv=LEVELS[idx];
   levelMaxHP=lv.enemyHP||MAX_ENEMY_HP;
-  cfg.bpm=lv.bpm||BATTLE_BPM; cfg.attackGap=60000/cfg.bpm*1.5;   // enemy cadence ← this song's tempo
+  noSkills=!!lv.noSkills;                                        // 序章关卡技能未解锁 → 无技能
+  cfg.bpm=lv.bpm||BATTLE_BPM; cfg.attackGap=60000/cfg.bpm*(lv.gapMul||1.5);   // bigger gapMul = sparser = easier
+  cfg.approach=lv.approach||1600;                               // ball travel time: bigger = more reaction time
+  battleHint=lvHint(lv, cfg.lang);                             // brief start-of-battle hint (shown a few sec)
   loadLevelBgm(lv.bgm);                                          // async; battle starts after pre-scene/countdown
   saveData.lastLevel=idx; writeSaveData(saveData);              // autosave: remember where we are
   if(lv.pre && !isSceneSeen(saveData, lv.pre)){ playScene(lv.pre); return; }   // play intro cutscene once
@@ -684,6 +695,7 @@ function readyThen(fn){ pendingStart=fn; phase='getset'; }
 function confirmReady(){ const fn=pendingStart; pendingStart=null; if(fn) fn(); }
 function proceedAfterWin(){
   const lv=LEVELS[currentLevel];
+  gameOver=false; winAutoAt=0;
   stopAudioPlayback();
   if(lv.post){ playScene(lv.post); }       // post-scene's `next` decides 下一关 / 回菜单
   else startLevel(currentLevel+1);
@@ -708,6 +720,7 @@ function onSceneEnd(id, next){
   if(next==='battle'){ beginLevelBattle(); }              // current level's battle
   else if(next==='tutorial'){ storyTeaching=true; phase='tutorial'; tutStep=0; tutReps=0; tutFlash=null; tutHoldUntil=0; }  // 碎片教学
   else if(next==='level'){ startLevel(currentLevel+1); }  // advance to next level
+  else if(next==='menu_state'){ openStateMenu(()=>playScene('after_first')); }   // 自检界面 → 关掉后接 after_first
   else if(next && SCENES[next]){ playScene(next); }       // chain another scene
   else { phase='menu'; }
 }
@@ -725,33 +738,151 @@ const TUTORIAL=[
 function tutName(g){ return (cfg.lang==='en' && g.name_en) ? g.name_en : g.name; }
 function tutCue(g){ return (cfg.lang==='en' && g.cue_en) ? g.cue_en : g.cue; }
 
+// ============================================================
+//  技能名册(调技能就改这里)：4 个主角手动技能 + 4 个伙伴自动技能。
+//  序章里它们全部「未解锁」(关卡 noSkills=true) → 序章战斗没有技能。
+//  每个手动技能可调:sequence(技能窗内动作序列) · windowMs(窗口时长ms) · effect(效果)。
+//  effect.type 目前实现:'damage'(扣敌血) / 'heal'(回血);desc 里标注了完整设定意图(待实现)。
+// ============================================================
 const SKILLS={
-  rupture:{
-    id:'rupture', name:'过载断层', short:'断层', timbre:'fracture_saw',
-    triggerLane:'high',
-    sequence:[              // 左上 - 右上 - 左中：顺手的上上横
-      {hand:'left', lane:'high'},
-      {hand:'right',lane:'high'},
-      {hand:'left', lane:'mid'},
-    ],
-    windowMs:5000,
-    effect:{type:'damage',value:72},
-    memory:'「别让清理进程读完你。」',
-  },
-  repair:{
-    id:'repair', name:'回声修复', short:'修复', timbre:'glass_bell',
-    triggerLane:'low',
-    sequence:[              // 左平 - 右平：两记平拳，最顺手
-      {hand:'left', lane:'mid'},
-      {hand:'right',lane:'mid'},
-    ],
-    windowMs:4200,
-    effect:{type:'heal',value:32},
-    memory:'「把掉线的那一段自己接回来。」',
-  },
+  tether:{    id:'tether',    name:'挽留', name_en:'Tether',    short:'挽留', timbre:'glass_bell',
+    triggerLane:'low',  sequence:[{hand:'left',lane:'mid'},{hand:'right',lane:'mid'}],
+    windowMs:4600, effect:{type:'heal',value:34}, chapter:1, trauma:'丧失', trauma_en:'Loss',
+    desc:'伸手留住——回血。', desc_en:'Reach out and hold on — heal.',
+    memory:'「把掉线的那一段自己接回来。」', memory_en:'"Reach back and hold the part that dropped."' },
+  pyre:{      id:'pyre',      name:'燔', name_en:'Pyre',        short:'燔',  timbre:'fracture_saw',
+    triggerLane:'high', sequence:[{hand:'left',lane:'high'},{hand:'right',lane:'high'},{hand:'left',lane:'mid'}],
+    windowMs:5000, effect:{type:'damage',value:84}, chapter:2, trauma:'共谋之血', trauma_en:'Blood debt',
+    desc:'焚身重击(完整设定:自损血量换百分比伤害)。', desc_en:'A burning hit (full design: spend your HP for % damage).',
+    memory:'「为救所爱，你会再做一次。」', memory_en:'"To save who you love, you would do it again."' },
+  effigy:{    id:'effigy',    name:'拟生', name_en:'Effigy',    short:'拟生', timbre:'hollow_choir',
+    triggerLane:'low',  sequence:[{hand:'right',lane:'mid'},{hand:'left',lane:'mid'},{hand:'right',lane:'low'}],
+    windowMs:5200, effect:{type:'heal',value:24}, chapter:3, trauma:'造物之罪', trauma_en:'Sin of creation',
+    desc:'造一个可弃的替身(完整设定:临时构造体替你挡伤)。', desc_en:'Make a discardable double (full design: a temporary construct that blocks).',
+    memory:'「你造过东西。现在，造一个回来。」', memory_en:'"You made something once. Now make one back."' },
+  severance:{ id:'severance', name:'断线', name_en:'Severance', short:'断线', timbre:'razor_pluck',
+    triggerLane:'high', sequence:[{hand:'right',lane:'high'},{hand:'left',lane:'high'},{hand:'right',lane:'mid'}],
+    windowMs:5000, effect:{type:'damage',value:66}, chapter:4, trauma:'被操纵', trauma_en:'Manipulation',
+    desc:'扯断操线——破控反击(完整设定:克制关底「覆写」)。', desc_en:'Cut the strings — break control (full design: counters the final overwrite).',
+    memory:'「所以我要把线，扯断。」', memory_en:'"So I cut the strings."' },
 };
-let equippedSkills={A:'rupture', B:'repair'};
-function skillDefForSlot(slot){ return SKILLS[equippedSkills[slot]] || SKILLS.rupture; }
+// 伙伴自动技能(章节 BOSS 掉落,1 个槽,触发各异)—— 序章未解锁。纯条件监听器,无技能窗。
+const AUTO_SKILLS={
+  sync:     { id:'sync',     name:'同步', name_en:'Sync',      trigger:'combo',   desc:'连击到阈值 → 自动回血。', desc_en:'On combo → auto-heal.' },
+  aegis:    { id:'aegis',    name:'庇护', name_en:'Aegis',     trigger:'lowHP',   desc:'血量危急 → 护盾减伤。',   desc_en:'When low → shield.' },
+  buffer:   { id:'buffer',   name:'缓冲', name_en:'Buffer',    trigger:'perfect', desc:'完美命中 → 连击保护。',   desc_en:'On perfects → combo guard.' },
+  overclock:{ id:'overclock',name:'过载', name_en:'Overclock', trigger:'noMiss',  desc:'稳住不失误 → 全程增幅。', desc_en:'On a clean streak → amp.' },
+};
+const SKILL_ORDER=['tether','pyre','effigy','severance'];   // 主角四技能展示顺序(对应四章)
+const AUTO_ORDER=['sync','aegis','buffer','overclock'];      // 伙伴四自动技能
+function skillUnlocked(id){ return !!(saveData && saveData.unlockedSkills && saveData.unlockedSkills.includes(id)); }
+let equippedSkills={A:null, B:null};   // 出战带的两个手动技能(序章为空——技能未解锁)
+let equippedAuto=null;                        // 伙伴装上的自动技能(序章用不到)
+let selSlot=null;                             // 已选中的槽:'A'|'B'|'auto'|null
+let stateCol=0, stateRow=0;                   // 光标:列(0=技能轨道 1=可调用模块) / 行
+let stateMsg='', stateMsgT=0;                 // "没有模块" 等临时提示
+function skillDefForSlot(slot){ return SKILLS[equippedSkills[slot]] || SKILLS.pyre; }
+
+/* ============================================================
+   STATUS / SELF-CHECK screen — 两列:左=技能轨道(主角A/B + 伙伴自动 + 退出),右=可调用模块。
+   光标用「双手上/下移动 + 平拳交叉确认」操作(也支持方向键/回车/Esc/点击)。
+   序章里没有已解锁模块 → 选中轨道会提示「目前没有可以调用的模块」。
+   ============================================================ */
+const STATE_LEFT=[                            // 左列固定 4 行(上下导航)
+  { key:'A',    owner:'hero' },
+  { key:'B',    owner:'hero' },
+  { key:'auto', owner:'frag' },
+  { key:'exit', owner:null  },
+];
+function stateRowLabel(it){
+  if(it.key==='exit') return T('state.exit');
+  if(it.key==='A') return T('state.slotA');
+  if(it.key==='B') return T('state.slotB');
+  return T('state.autoslot');
+}
+function stateRightItems(){                    // 当前选中槽可装的(已解锁)技能 = 模块
+  if(selSlot==='auto') return AUTO_ORDER.map(id=>AUTO_SKILLS[id]).filter(d=>skillUnlocked(d.id));
+  if(selSlot==='A'||selSlot==='B') return SKILL_ORDER.map(id=>SKILLS[id]).filter(d=>skillUnlocked(d.id));
+  return [];
+}
+function openStateMenu(returnFn){ stateReturn=returnFn||null; selSlot=null; stateCol=0; stateRow=0; stateMsg=''; phase='menu_state'; }
+function closeStateMenu(){ const fn=stateReturn; stateReturn=null; if(fn) fn(); else phase='menu'; }
+function equipToSlot(def){
+  if(selSlot==='auto') equippedAuto=def.id;
+  else if(selSlot==='A'||selSlot==='B') equippedSkills[selSlot]=def.id;
+}
+function stateConfirm(){
+  if(stateCol===0){
+    const it=STATE_LEFT[stateRow];
+    if(it.key==='exit'){ closeStateMenu(); return; }
+    selSlot=it.key;
+    if(stateRightItems().length===0){ stateMsg=T('state.nomod'); stateMsgT=performance.now()+2200; return; }  // 序章:没有模块
+    stateCol=1; stateRow=0;
+  } else {
+    const ri=stateRightItems(), def=ri[stateRow];
+    if(def) equipToSlot(def);
+    stateCol=0;                                // 装上后回到左列
+  }
+}
+function stateNav(dir){
+  if(dir==='confirm'){ stateConfirm(); return; }
+  const d=dir==='down'?1:-1;
+  if(stateCol===0){ stateRow=(stateRow+d+STATE_LEFT.length)%STATE_LEFT.length; }
+  else { const n=Math.max(1,stateRightItems().length); stateRow=(stateRow+d+n)%n; }
+}
+function drawStateRow(it, x, y, w, h, cursor, locked){
+  ctx.save();
+  ctx.fillStyle = cursor?'rgba(46,204,113,.22)':locked?'rgba(255,210,58,.16)':'rgba(58,120,255,.08)';
+  ctx.fillRect(x,y,w,h);
+  ctx.strokeStyle = cursor?cssCol('--green'):locked?cssCol('--gold'):'rgba(255,255,255,.22)';
+  ctx.lineWidth=cursor?3:1.5; ctx.strokeRect(x,y,w,h); ctx.restore();
+  ctx.textAlign='left';
+  if(it.key==='exit'){ ctx.fillStyle='#eaf0ff';ctx.font='bold 18px Segoe UI';ctx.fillText('⏎ '+stateRowLabel(it), x+14, y+h/2+6); return; }
+  ctx.fillStyle=it.owner==='hero'?'#bda6ff':'#7fe0ff';ctx.font='12px Segoe UI';
+  ctx.fillText(speakerName(it.owner,cfg.lang)+' · '+stateRowLabel(it), x+14, y+20);
+  const eqId = it.key==='auto'?equippedAuto:equippedSkills[it.key];
+  const def = eqId && (SKILLS[eqId]||AUTO_SKILLS[eqId]);
+  ctx.fillStyle=def?'#eaf0ff':'#6f7aa5';ctx.font='bold 18px Segoe UI';
+  ctx.fillText(def?((cfg.lang==='en'&&def.name_en)?def.name_en:def.name):T('state.empty'), x+14, y+h-12);
+}
+function drawStateModule(def, x, y, w, h, cursor){
+  ctx.save();
+  ctx.fillStyle=cursor?'rgba(46,204,113,.22)':'rgba(58,120,255,.08)';ctx.fillRect(x,y,w,h);
+  ctx.strokeStyle=cursor?cssCol('--green'):cssCol('--blue');ctx.lineWidth=cursor?3:1.5;ctx.strokeRect(x,y,w,h);ctx.restore();
+  ctx.textAlign='left';ctx.fillStyle='#eaf0ff';ctx.font='bold 17px Segoe UI';
+  ctx.fillText((cfg.lang==='en'&&def.name_en)?def.name_en:def.name, x+14, y+22);
+  ctx.fillStyle='#9fb0e8';ctx.font='12px Segoe UI';
+  ctx.fillText(((cfg.lang==='en'&&def.desc_en)?def.desc_en:def.desc)||'', x+14, y+h-12);
+}
+function drawStateMenu(now){
+  menuBtns=[];
+  const W=cv.width,H=cv.height;
+  ctx.textAlign='center';
+  ctx.fillStyle='#eaf0ff';ctx.font='bold 30px Segoe UI';ctx.fillText(T('state.title'), W/2, H*0.10);
+  ctx.fillStyle='#8a93b8';ctx.font='13px Segoe UI';ctx.fillText(T('state.nav'), W/2, H*0.10+24);
+  const lx=W*0.10, lw=W*0.34, rx=W*0.52, rw=W*0.38, top=H*0.24, rowH=56, gap=12;
+  ctx.textAlign='left';ctx.font='bold 15px Segoe UI';ctx.fillStyle='#9fb0e8';
+  ctx.fillText(T('state.tracks'), lx, top-14);
+  ctx.fillText(T('state.modules'), rx, top-14);
+  // LEFT column
+  for(let i=0;i<STATE_LEFT.length;i++){
+    const it=STATE_LEFT[i], y=top+i*(rowH+gap), cursor=(stateCol===0&&stateRow===i), locked=(it.key!=='exit'&&selSlot===it.key);
+    drawStateRow(it, lx, y, lw, rowH, cursor, locked);
+    (function(idx){ addBtn(lx,y,lw,rowH, ()=>{ stateCol=0; stateRow=idx; stateConfirm(); }); })(i);
+  }
+  // RIGHT column
+  if(selSlot){
+    const ri=stateRightItems();
+    if(ri.length===0){ ctx.textAlign='center';ctx.fillStyle='#8a93b8';ctx.font='16px Segoe UI';ctx.fillText(T('state.nomod'), rx+rw/2, top+rowH); }
+    else for(let i=0;i<ri.length;i++){
+      const y=top+i*(rowH+gap), cursor=(stateCol===1&&stateRow===i);
+      drawStateModule(ri[i], rx, y, rw, rowH, cursor);
+      (function(idx){ addBtn(rx,y,rw,rowH, ()=>{ stateCol=1; stateRow=idx; stateConfirm(); }); })(i);
+    }
+  } else { ctx.textAlign='center';ctx.fillStyle='#6f7aa5';ctx.font='15px Segoe UI';ctx.fillText(T('state.pickslot'), rx+rw/2, top+rowH); }
+  // transient message
+  if(stateMsg && performance.now()<stateMsgT){ ctx.textAlign='center';ctx.fillStyle=cssCol('--gold');ctx.font='bold 18px Segoe UI';ctx.fillText(stateMsg, W/2, H*0.92); }
+}
 function handLabel(hand){ return hand==='left'?'左':'右'; }
 function laneLabel(lane){ return lane==='high'?'上':lane==='low'?'下':'中'; }
 function moveLabel(m){ return handLabel(m.hand)+laneLabel(m.lane)+'拳'; }
@@ -914,6 +1045,7 @@ function enterGame(){
   phase='game';
   paused=false; pauseMenuOpen=false; gmenu=null; crossStart=0;        // clear any pause state
   if(actx && actx.state==='suspended') actx.resume();                 // ensure clock runs
+  hintUntil = battleHint ? performance.now()+6500 : 0;                // show the start-of-battle hint a few sec
   balls=[];particles=[];beams=[];pops=[];
   score=0;combo=0;maxCombo=0;enemyHP=levelMaxHP;playerHP=MAX_PLAYER_HP;
   nextStep=0;nextClickBeat=0;gameOver=false;win=false;stats={perfect:0,good:0,miss:0};  // reset beat cursor too (else metronome drifts away each replay)
@@ -927,6 +1059,7 @@ function enterGame(){
 function endGame(won){
   gameOver=true; win=won; phase='gameover'; usingMidi=false;
   if(won && !trainingMode){ markCleared(saveData,currentLevel,score); writeSaveData(saveData); }   // story only: persist + unlock
+  winAutoAt = (won && !trainingMode) ? performance.now()+1700 : 0;   // 剧情胜利:亮一下"胜利"就自动进剧情,不给菜单
   hands.left.menu=null; hands.right.menu=null;
 }
 
@@ -951,7 +1084,8 @@ function menuPunch(hand, lane, now){
 }
 function doMenu(act){
   if(phase==='getset'){ if(act==='mid') confirmReady(); return; }               // 平拳 = 确认站好,开始
-  if(phase==='cutscene'){ if(act==='down') advanceScene(); else if(act==='up') sceneBack(); return; }  // 下=下一句 上=上一句
+  if(phase==='menu_state'){ if(act==='up') stateNav('up'); else if(act==='down') stateNav('down'); else if(act==='mid') stateNav('confirm'); return; }   // 上下移动 · 平拳交叉确认
+  if(phase==='cutscene'){ if(act==='down'||act==='mid') advanceScene(); else if(act==='up') sceneBack(); return; }  // 下/平拳交叉=下一句 上=上一句
   if(phase==='training'){ if(act==='up') gnavUp(); else if(act==='down') gnavDown(); else if(act==='mid') gnavConfirm(); return; }  // 训练选曲手势
   if(phase==='intro'){
     if(act==='up'){ phase='tutorial'; tutStep=0; tutReps=0; tutFlash=null; tutHoldUntil=0; }   // 双拳上击 = 进入教学
@@ -1010,7 +1144,7 @@ function registerPunch(hand, lane, now, hitT){
   const col = hand==='left'?'--blue':'--red';
   const y = laneY(lane);
   shake=Math.min(shake+6,16);
-  if (phase==='intro' || phase==='gameover' || phase==='cutscene' || phase==='getset' || phase==='training'){ menuPunch(hand, lane, now); return; }  // gesture-driven screens
+  if (phase==='intro' || phase==='gameover' || phase==='cutscene' || phase==='getset' || phase==='training' || phase==='menu_state'){ menuPunch(hand, lane, now); return; }  // gesture-driven screens
   if (phase==='getready'||isMenuPhase()) return;   // other menu screens use mouse/keys, not punches
   if (phase==='practice'){
     beams.push({ y, col, t:now, hand, lane, reach:SPAWNX() });
@@ -1045,7 +1179,7 @@ function registerPunch(hand, lane, now, hitT){
     handleActiveSkillPunch(hand,lane,now);
     return;
   }
-  if (phase==='game' && trySkillGesture(hand,lane,now)) return;
+  if (phase==='game' && !noSkills && trySkillGesture(hand,lane,now)) return;
   // GAME: the column shoots out and is BLOCKED by the FRONTMOST still-approaching ball
   // in this lane+hand; that ball explodes. Only the closest one counts.
   let target=null, tx=Infinity;
@@ -1180,15 +1314,16 @@ function processHand(side, w, sho, body, now){
 
 function update(now, dt){
   if (paused) { lastDetT=now; return; }   // game logic is gated by phase below; cleanup still runs in gameover
+  if(phase==='gameover' && win && !trainingMode && winAutoAt && performance.now()>winAutoAt){ winAutoAt=0; proceedAfterWin(); return; }  // 剧情胜利 → 自动续
   if (phase==='tutorial' && tutHoldUntil && now>=tutHoldUntil){   // celebration done → next move
     tutHoldUntil=0; tutReps=0; tutStep++;
-    if(tutStep>=TUTORIAL.length) startSkillTutorial();
+    if(tutStep>=TUTORIAL.length){ if(storyTeaching){ storyTeaching=false; playScene('after_tutorial'); } else if(!noSkills) startSkillTutorial(); else startGetReady(); }   // 序章无技能 → 跳过技能教学
   }
   if (phase==='getready'){
     if(performance.now()-getReadyWall>=6000) enterGame();  // hand off with a FRESH clock;
     // skip game logic this frame — `now` is still the stale pre-reset timestamp
   } else if (phase==='game'){
-    updateSkills(now,dt);
+    if(!noSkills) updateSkills(now,dt);
     const attacksMuted=!!skillState.active;
     spawnDue(now, attacksMuted);
     if(!attacksMuted){
@@ -1257,7 +1392,7 @@ function render(now){
     ctx.restore();
   }
   // lane tracks + hit line — hidden on menu / cutscene / ready-gate screens for a clean look
-  if(!isMenuPhase() && phase!=='cutscene' && phase!=='getset'){
+  if(!isMenuPhase() && phase!=='cutscene' && phase!=='getset' && phase!=='getready'){   // 倒数5秒内也不画判定线
     for(const lane of LANES){
       const y=laneY(lane);
       ctx.strokeStyle='rgba(120,140,210,.12)';ctx.lineWidth=2;
@@ -1280,6 +1415,9 @@ function render(now){
     glowCircle(HITX()-W*0.05, H*0.5, 10, '#ffffff', 14);
   }
 
+  // beams / balls / particles / pops = battle FX only — hidden on menus / cutscene / 站好确认 / 倒数
+  // (fixes: confirm-gesture light columns leaking into dialogue / status / battle-start)
+  if(!isMenuPhase() && phase!=='cutscene' && phase!=='getset' && phase!=='getready'){
   // beams (player light columns) — horizontal beam is BLOCKED at the ball it hits
   for(const bm of beams){
     const k=(now-bm.t)/260, a=Math.max(0,1-k), col=cssCol(bm.col);
@@ -1321,6 +1459,7 @@ function render(now){
   for(const p of pops){const a=1-(now-p.t)/800;ctx.save();ctx.globalAlpha=a;
     ctx.fillStyle=cssCol(p.col);ctx.font='bold 26px Segoe UI';ctx.textAlign='center';
     ctx.fillText(p.txt,p.x,p.y-40-(now-p.t)*0.03);ctx.restore();}
+  }   // end battle-FX guard
 
   if(skillState.active) drawSkillWindow(now);
 
@@ -1332,6 +1471,7 @@ function render(now){
   else if(phase==='training') drawTraining(now);
   else if(phase==='cutscene') drawCutscene(now);
   else if(phase==='getset') drawGetSet(now);
+  else if(phase==='menu_state') drawStateMenu(now);
   else if(phase==='practice') drawTester(now);
   else if(phase==='tutorial') drawTutorial(now);
   else if(phase==='skilltutorial') drawSkillTutorial(now);
@@ -1339,7 +1479,7 @@ function render(now){
   else if(phase==='intro') drawIntro(now);
   else hud(now);   // game + gameover
   // ---- debug cam: shown in intro/tutorial/practice/gameover; hidden on menus/game/getready unless 调试 ----
-  if(cfg.debug || phase==='intro'||phase==='tutorial'||phase==='skilltutorial'||phase==='practice'||phase==='gameover'||phase==='getset') drawDebug();
+  if(cfg.debug || phase==='intro'||phase==='tutorial'||phase==='skilltutorial'||phase==='practice'||phase==='getset' || (phase==='gameover' && !(win && !trainingMode))) drawDebug();   // 剧情胜利时不闪摄像头
   ctx.setTransform(1,0,0,1,0,0);
   if(phase==='gameover') drawEnd(now);
   if(pauseMenuOpen) drawGmenu(now, true);           // pause menu over the frozen battle
@@ -1347,6 +1487,12 @@ function render(now){
     const p=Math.min(1,(performance.now()-crossStart)/1600);
     ctx.textAlign='center';ctx.fillStyle='rgba(255,210,58,'+(0.4+0.5*p)+')';ctx.font='bold 16px Segoe UI';
     ctx.fillText((cfg.lang==='en'?'cross-arms pause ':'抱臂暂停 ')+(p*100|0)+'%', cv.width/2, 28);
+  }
+  if(phase==='game' && !pauseMenuOpen && battleHint && performance.now()<hintUntil){   // start-of-battle hint
+    ctx.save();ctx.globalAlpha=Math.min(1,(hintUntil-performance.now())/600);
+    ctx.textAlign='center';ctx.font='bold 22px Segoe UI';ctx.fillStyle='rgba(255,225,120,0.97)';
+    ctx.fillText(battleHint, cv.width/2, cv.height*0.30);
+    ctx.restore();
   }
 }
 
@@ -1358,7 +1504,7 @@ function bar(x,y,w,h,frac,col,label){
 }
 function hud(now){
   const W=cv.width;
-  drawSkillHud(now);
+  if(!noSkills) drawSkillHud(now);
   bar(W*0.52,104,W*0.40,16,enemyHP/levelMaxHP,cssCol('--red'),'ENEMY');
   bar(28,104,W*0.30,16,playerHP/MAX_PLAYER_HP,cssCol('--blue'),'YOU');
   ctx.fillStyle='#fff';ctx.textAlign='left';
@@ -1567,7 +1713,7 @@ function drawSkillHud(now){
    ============================================================ */
 let menuBtns=[];                 // [{x,y,w,h,action}] rebuilt each menu render
 let mouseX=-1, mouseY=-1;        // last cursor pos in canvas coords (for hover feedback)
-function isMenuPhase(){ return phase==='menu'||phase==='loadmenu'||phase==='levelselect'||phase==='settings'||phase==='training'; }
+function isMenuPhase(){ return phase==='menu'||phase==='loadmenu'||phase==='levelselect'||phase==='settings'||phase==='training'||phase==='menu_state'; }
 function mouseIn(x,y,w,h){ return mouseX>=x&&mouseX<=x+w&&mouseY>=y&&mouseY<=y+h; }
 function canvasXY(ev){
   const r=cv.getBoundingClientRect();
@@ -1742,7 +1888,8 @@ function openTrainingMenu(){
 }
 function startTraining(i){
   const s=TRAINING_SONGS[i]; trainingMode=true; gmenu=null;
-  levelMaxHP=MAX_ENEMY_HP; cfg.bpm=s.bpm; cfg.attackGap=60000/cfg.bpm*1.5;
+  levelMaxHP=MAX_ENEMY_HP; cfg.bpm=s.bpm; cfg.attackGap=60000/cfg.bpm*1.5; cfg.approach=1600;
+  noSkills=false; battleHint='';          // 训练有技能(曲子自带触发轨)
   loadLevelBgm(s.bgm);
   readyThen(()=>enterGame());            // 站好确认 → 直接开打(无剧情)
 }
@@ -1931,6 +2078,7 @@ function drawGetSet(now){
   ctx.fillStyle=cssCol('--green');ctx.font='bold 26px Segoe UI';ctx.fillText(T('getset.confirm'), W/2, H*0.62);
   ctx.restore();
   ctx.fillStyle='#8a93b8';ctx.font='13px Segoe UI';ctx.fillText(T('getset.hint'), W/2, H*0.62+30);
+  ctx.fillStyle='#9fb0e8';ctx.font='15px Segoe UI';ctx.fillText(T('getset.dialog'), W/2, H*0.75);   // 提前告诉玩家对话操作
 }
 function drawGetReady(){
   const W=cv.width,H=cv.height,e=performance.now()-getReadyWall;
@@ -2028,10 +2176,17 @@ function drawEnd(now){
   ctx.fillText(win?T('over.victory'):T('over.defeat'),cv.width/2,cv.height/2-70);
   ctx.fillStyle='#cfd6f5';ctx.font='22px Segoe UI';
   ctx.fillText(T('over.stats', score, maxCombo, stats.perfect, stats.good, stats.miss),cv.width/2,cv.height/2-22);
+  if(win && !trainingMode){          // 剧情胜利:不显示选择,自动继续
+    ctx.save();ctx.globalAlpha=0.6+0.4*Math.sin(now/300);
+    ctx.fillStyle='#9fb0e8';ctx.font='20px Segoe UI';
+    ctx.fillText(cfg.lang==='en'?'continuing…':'继续中…',cv.width/2,cv.height/2+34);
+    ctx.restore();
+    return;
+  }
   ctx.fillStyle=cssCol('--green');ctx.font='bold 26px Segoe UI';
-  ctx.fillText(win?T('over.continue'):T('over.replay'),cv.width/2,cv.height/2+30);
+  ctx.fillText(T('over.replay'),cv.width/2,cv.height/2+30);   // 失败/训练:重新战斗(剧情胜利已提前 return)
   ctx.fillStyle='#cfd6f5';ctx.font='bold 22px Segoe UI';
-  ctx.fillText(T('over.select'),cv.width/2,cv.height/2+66);
+  ctx.fillText(trainingMode?T('over.totrain'):T('over.select'),cv.width/2,cv.height/2+66);
   drawMenuDots(now, cv.height/2+104);
   ctx.fillStyle='#8a93b8';ctx.font='13px Segoe UI';
   ctx.fillText(cfg.lang==='en'?'(or click / R)':'(也可点击 / 按 R)',cv.width/2,cv.height/2+142);
@@ -2112,6 +2267,12 @@ function togglePause(){          // Space — opens/closes the pause menu (which
 }
 window.addEventListener('keydown',e=>{
   if(started && phase==='getset' && (e.code==='Space'||e.code==='Enter')){ e.preventDefault(); confirmReady(); return; }
+  if(started && phase==='menu_state'){
+    if(e.code==='Escape'){ e.preventDefault(); closeStateMenu(); return; }
+    if(e.code==='ArrowUp'){ e.preventDefault(); stateNav('up'); return; }
+    if(e.code==='ArrowDown'){ e.preventDefault(); stateNav('down'); return; }
+    if(e.code==='Enter'||e.code==='Space'){ e.preventDefault(); stateNav('confirm'); return; }
+  }
   if(started && phase==='cutscene' && (e.code==='ArrowUp'||e.code==='ArrowLeft')){ e.preventDefault(); sceneBack(); return; }
   if(started && phase==='cutscene' && (e.code==='Space'||e.code==='Enter'||e.code==='ArrowRight'||e.code==='ArrowDown')){ e.preventDefault(); advanceScene(); return; }
   if(started && (phase==='training' || pauseMenuOpen)){

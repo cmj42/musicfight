@@ -10,16 +10,27 @@ export const CHAPTERS = [
     levels:[], locked:true },
 ];
 
+// 关卡难度字段(调手感就改这里):
+//   enemyHP  = 敌人血量(越高越久)
+//   gapMul   = 敌人攻击间隔倍率(× 一拍);越大越稀疏 = 越简单。基础对波约 1.5。
+//   approach = 光球从出现到抵达的毫秒(越大越慢 = 反应时间越长 = 越简单)
+//   noSkills = true 时本关没有技能(序章技能尚未解锁)
+//   hint     = 开局几秒显示的提示 {zh,en}(可空)
 export const LEVELS = [
   { id:'p0', no:'0-0', title:'觉醒之战', subtitle:'先学会出拳', title_en:'Awakening', subtitle_en:'Learn to punch',
-    bgm:'skill_battle_test.mid',                                    bpm:132, enemyHP:200,
-    tutorial:true, pre:'opening', post:'after_first' },
+    bgm:'skill_battle_test.mid',                                    bpm:132, enemyHP:40, gapMul:2.6, approach:1800,
+    noSkills:true, tutorial:true, pre:'opening', post:'after_first1',
+    hint:{ zh:'对应出拳，在敌方攻击抵达判定线前把它破解掉！', en:'Punch the matching lane — break each attack before it reaches the line!' } },
   { id:'p1', no:'0-1', title:'红线内核', subtitle:'追兵压上', title_en:'Redline Kernel', subtitle_en:'The chase closes in',
-    bgm:'assets/battle_bgm_dark_cyber_metal_03_redline_kernel.mid', bpm:150, enemyHP:240 },
+    bgm:'assets/battle_bgm_dark_cyber_metal_02_redline_kernel.mid', bpm:150, enemyHP:80, gapMul:2.2, approach:1800,
+    noSkills:true, post:'after_p1',
+    hint:{ zh:'追兵更快了——盯住每颗光球的轨道。', en:'They’re faster now — watch each orb’s lane.' } },
   { id:'p2', no:'0-2', title:'空铸厂',   subtitle:'冷的清理程序', title_en:'Null Foundry', subtitle_en:'A cold purge process',
-    bgm:'assets/battle_bgm_dark_cyber_metal_01_null_foundry.mid',   bpm:138, enemyHP:300 },
+    bgm:'assets/battle_bgm_dark_cyber_metal_03_null_foundry.mid',   bpm:138, enemyHP:100, gapMul:2.1, approach:1800,
+    noSkills:true, post:'after_p2' },
   { id:'p3', no:'0-3', title:'黑冰',     subtitle:'防火墙撕开', title_en:'Black Ice', subtitle_en:'Firewall breach',
-    bgm:'assets/battle_bgm_dark_cyber_metal_02_black_ice.mid',      bpm:128, enemyHP:360, post:'prologue_end' },
+    bgm:'assets/battle_bgm_dark_cyber_metal_01_black_ice.mid',      bpm:128, enemyHP:120, gapMul:2.0, approach:1800,
+    noSkills:true, post:'prologue_end' },
 ];
 
 // ---- lookups ----
@@ -38,3 +49,4 @@ export function chTitle(ch, lang){ return (lang==='en' && ch.title_en) ? ch.titl
 export function chSub(ch, lang){ return (lang==='en' && ch.subtitle_en) ? ch.subtitle_en : ch.subtitle; }
 export function lvTitle(lv, lang){ return (lang==='en' && lv.title_en) ? lv.title_en : lv.title; }
 export function lvSub(lv, lang){ return (lang==='en' && lv.subtitle_en) ? lv.subtitle_en : lv.subtitle; }
+export function lvHint(lv, lang){ return lv && lv.hint ? ((lang==='en' && lv.hint.en) ? lv.hint.en : lv.hint.zh) : ''; }
