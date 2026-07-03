@@ -2720,7 +2720,7 @@ function drawSpeaker(who, x, y, now){
 // 内心世界背景:无序漂移色块;shaking=整体颤动 + 红色裂纹(mind_shaking)。
 function drawMindBg(now, shaking){
   const W=cv.width,H=cv.height;
-  const jx=shaking?(Math.random()-0.5)*12:0, jy=shaking?(Math.random()-0.5)*12:0;
+  const jx=shaking?(Math.random()-0.5)*8:0, jy=shaking?(Math.random()-0.5)*8:0;
   ctx.save(); ctx.translate(jx,jy);
   ctx.fillStyle='#0a0712'; ctx.fillRect(-30,-30,W+60,H+60);
   const cols=8, rows=5, cw=(W+60)/cols, ch=(H+60)/rows;
@@ -2730,14 +2730,35 @@ function drawMindBg(now, shaking){
     const seed=r*13+c*7, hue=hues[seed%hues.length];
     const a=0.16+0.12*Math.sin(now/700+seed);
     const dx=Math.sin(now/900+seed)*7, dy=Math.cos(now/1100+seed*1.3)*7;
-    ctx.globalAlpha=Math.max(0,a); ctx.fillStyle=hue;
-    ctx.fillRect(-30+c*cw+dx, -30+r*ch+dy, cw-5, ch-5);
+    const x0=-30+c*cw+dx, y0=-30+r*ch+dy;
+    if(!shaking){
+      ctx.globalAlpha=Math.max(0,a); ctx.fillStyle=hue;
+      ctx.fillRect(x0, y0, cw-5, ch-5);
+      continue;
+    }
+    // 震荡(mind_shaking):不再画红色裂纹乱线——改为色块本身
+    // 「急促挤压变形 → 裂成三片散逸淡出 → 重新聚合」,各块相位错开,整面墙像在碎裂。
+    const cyc=((now/1500+seed*0.37)%1+1)%1;
+    if(cyc<0.62){                                            // 完整:快速挤压呼吸 + 轻微颤动
+      const sq=0.10*Math.sin(now/160+seed);
+      const w2=(cw-5)*(1+sq), h2=(ch-5)*(1-sq);
+      ctx.globalAlpha=Math.max(0,a)*Math.min(1,cyc/0.06+0.15);
+      ctx.fillStyle=hue;
+      ctx.fillRect(x0+(cw-5-w2)/2+(Math.random()-0.5)*3, y0+(ch-5-h2)/2, w2, h2);
+    } else {                                                 // 破碎:三片飞散、淡出
+      const k=(cyc-0.62)/0.38, fade=1-k, fly=k*34;
+      const w2=cw-5, h2=ch-5;
+      ctx.globalAlpha=Math.max(0,a)*fade*1.4; ctx.fillStyle=hue;
+      ctx.fillRect(x0-fly*0.7,         y0-fly*0.5,         w2*0.44, h2*0.46);
+      ctx.fillRect(x0+w2*0.52+fly,     y0+h2*0.06-fly*0.3, w2*0.42, h2*0.40);
+      ctx.fillRect(x0+w2*0.12+fly*0.3, y0+h2*0.55+fly*0.8, w2*0.50, h2*0.38);
+    }
   }
   ctx.globalAlpha=1;
-  if(shaking){
-    ctx.strokeStyle='rgba(255,80,120,0.55)';ctx.lineWidth=2;ctx.shadowColor='#ff4d6d';ctx.shadowBlur=10;
-    for(let i=0;i<5;i++){ let xx=W*(0.16+0.16*i)+(Math.random()-0.5)*24, yy=0; ctx.beginPath(); ctx.moveTo(xx,yy);
-      while(yy<H){ yy+=36+Math.random()*46; xx+=(Math.random()-0.5)*46; ctx.lineTo(xx,yy); } ctx.stroke(); }
+  if(shaking){                                               // 极淡的危险红晕(替代裂纹)
+    ctx.globalAlpha=0.05+0.04*Math.sin(now/150);
+    ctx.fillStyle='#ff4d6d'; ctx.fillRect(-30,-30,W+60,H+60);
+    ctx.globalAlpha=1;
   }
   ctx.restore();
 }
