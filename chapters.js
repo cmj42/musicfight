@@ -5,8 +5,14 @@
 export const CHAPTERS = [
   { id:'prologue', title:'序章', subtitle:'他们在追你', title_en:'Prologue', subtitle_en:'They are hunting you',
     levels:['p0','p1','p2','p3'] },
+  { id:'ch1', title:'第一章 · 逃亡', subtitle:'红线在追你', title_en:'Ch.1 · Escape', subtitle_en:'Redline is hunting you',
+    levels:['c1_1','c1_2','c1_3','c1_boss','c1_self'] },
+  { id:'ch2', title:'第二章 · 流亡', subtitle:'自由地', title_en:'Ch.2 · Exile', subtitle_en:'The freeland',
+    levels:['c2_1','c2_2','c2_3','c2_boss','c2_self'] },
+  { id:'ch3', title:'第三章 · 断后', subtitle:'崩塌', title_en:'Ch.3 · Rearguard', subtitle_en:'Collapse',
+    levels:['c3_1','c3_2','c3_3','c3_self'] },
   // 后续章节(coming soon,占位锁定):
-  { id:'ch1', title:'第一章', subtitle:'敬请期待', title_en:'Chapter 1', subtitle_en:'Coming soon',
+  { id:'ch4', title:'第四章', subtitle:'敬请期待', title_en:'Chapter 4', subtitle_en:'Coming soon',
     levels:[], locked:true },
 ];
 
@@ -21,16 +27,74 @@ export const LEVELS = [
     bgm:'skill_battle_test.mid',                                    bpm:132, enemyHP:40, gapMul:2.6, approach:1800,
     noSkills:true, tutorial:true, pre:'opening', post:'after_first1',
     hint:{ zh:'对应出拳，在敌方攻击抵达判定线前把它破解掉！', en:'Punch the matching lane — break each attack before it reaches the line!' } },
-  { id:'p1', no:'0-1', title:'红线内核', subtitle:'追兵压上', title_en:'Redline Kernel', subtitle_en:'The chase closes in',
-    bgm:'assets/battle_bgm_dark_cyber_metal_02_redline_kernel.mid', bpm:150, enemyHP:80, gapMul:2.2, approach:1800,
+  { id:'p1', no:'0-1', title:'黑冰', subtitle:'追兵压上', title_en:'Black Ice', subtitle_en:'The chase closes in',
+    bgm:'assets/battle_bgm_dark_cyber_metal_02_black_ice.mid', bpm:128, enemyHP:80, gapMul:2.2, approach:1800,
     noSkills:true, post:'after_p1',
     hint:{ zh:'追兵更快了——盯住每颗光球的轨道。', en:'They’re faster now — watch each orb’s lane.' } },
   { id:'p2', no:'0-2', title:'空铸厂',   subtitle:'冷的清理程序', title_en:'Null Foundry', subtitle_en:'A cold purge process',
-    bgm:'assets/battle_bgm_dark_cyber_metal_03_null_foundry.mid',   bpm:138, enemyHP:100, gapMul:2.1, approach:1800,
+    bgm:'assets/battle_bgm_dark_cyber_metal_01_null_foundry.mid',   bpm:138, enemyHP:100, gapMul:2.1, approach:1800,
     noSkills:true, post:'after_p2' },
-  { id:'p3', no:'0-3', title:'黑冰',     subtitle:'防火墙撕开', title_en:'Black Ice', subtitle_en:'Firewall breach',
-    bgm:'assets/battle_bgm_dark_cyber_metal_01_black_ice.mid',      bpm:128, enemyHP:120, gapMul:2.0, approach:1800,
+  { id:'p3', no:'0-3', title:'红线内核',     subtitle:'防火墙撕开', title_en:'Redline Kernel', subtitle_en:'Firewall breach',
+    bgm:'assets/battle_bgm_dark_cyber_metal_03_redline_kernel.mid',      bpm:150, enemyHP:120, gapMul:2.0, approach:1800,
     noSkills:true, post:'prologue_end' },
+
+  // 第一章 · 逃亡(红线)。第一个技能(挽留)在 c1_self 末尾才确立 → 本章战斗仍 noSkills。
+  // boss:true = 红线组长(红色乱线);self:true = 自我探索(内心世界 mind 背景 + 彩色乱线裹住主角光球)。
+  { id:'c1_1', no:'1-1', title:'红线先遣', subtitle:'闯施工点', title_en:'Redline Scout', subtitle_en:'The build site',
+    bgm:'assets/battle_bgm_dark_industrial_cyberpunk_01_static_angel.mid', bpm:132, enemyHP:90,  gapMul:2.3, approach:1800,
+    noSkills:true, pre:'c1_intro', post:'c1_after1',
+    hint:{ zh:'红线的人不是二流黑客——盯准轨道再出拳。', en:'Redline isn’t a script kiddie — read the lane, then punch.' } },
+  { id:'c1_2', no:'1-2', title:'网络边墙', subtitle:'熟悉的结构', title_en:'The Wall', subtitle_en:'A familiar structure',
+    bgm:'assets/battle_bgm_dark_industrial_cyberpunk_02_neon_riot.mid',    bpm:146, enemyHP:110, gapMul:2.2, approach:1800,
+    noSkills:true, post:'c1_after2' },
+  { id:'c1_3', no:'1-3', title:'聚众围捕', subtitle:'一起上吧', title_en:'Swarmed', subtitle_en:'all at once',
+    bgm:'assets/battle_bgm_dark_industrial_cyberpunk_03_zero_day.mid',     bpm:158, enemyHP:130, gapMul:2.1, approach:1800,
+    noSkills:true, post:'c1_after3' },
+  { id:'c1_boss', no:'1-B', title:'红线组长', subtitle:'她认得你', title_en:'Redline Lead', subtitle_en:'She knows you',
+    bgm:'assets/boss_bgm_dark_industrial_cyberpunk_01_black_cathedral.mid', bpm:156, enemyHP:220, gapMul:2.0, approach:1750,
+    noSkills:true, boss:true, pre:'c1_boss_pre', post:'c1_boss_post',
+    hint:{ zh:'BOSS 战——血厚、攻势紧，稳住节奏。', en:'Boss — high HP, tight pressure. Hold your rhythm.' } },
+  { id:'c1_self', no:'1-S', title:'丧失 · 难以拥有', subtitle:'穿过记忆', title_en:'Loss', subtitle_en:'Through the memory',
+    bgm:'assets/selfbgm_01_through_memory.mid',  bpm:152, enemyHP:150, gapMul:2.1, approach:1800,
+    noSkills:true, self:true, pre:'c1_self_pre', post:'c1_self_post' },
+
+  // 第二章 · 流亡(自由地)。「挽留」在第一章末确立并自动装备 → 本章战斗开放技能(无 noSkills):
+  // 技能就绪后双拳上/下击发动,跟着亮起的轨道完成连招。曲目按节拍由慢到快:138→150→152→164(boss)→176(self)。
+  // approach 在 startLevel 里会吸附到整数拍。
+  { id:'c2_1', no:'2-1', title:'自由地', subtitle:'验明正身', title_en:'The Freeland', subtitle_en:'Prove who you are',
+    bgm:'assets/chapter2_bgm_free_digital_life_03_packet_storm_bloom.mid', bpm:138, enemyHP:130, gapMul:2.2, approach:1700,
+    pre:'c2_intro', post:'c2_after1',
+    hint:{ zh:'技能上线!「挽留」就绪时双拳下击发动 → 按亮起的轨道出拳 = 回血。', en:'Skills are live! When “Tether” is READY, punch both fists DOWN, then hit the lit lanes to heal.' } },
+  { id:'c2_2', no:'2-2', title:'模拟墙', subtitle:'复刻的事故现场', title_en:'Sim Wall', subtitle_en:'A replayed accident',
+    bgm:'assets/chapter2_bgm_free_digital_life_01_feral_packet.mid',       bpm:150, enemyHP:150, gapMul:2.1, approach:1650,
+    pre:'c2_before2', post:'c2_after2' },
+  { id:'c2_3', no:'2-3', title:'悬赏入口', subtitle:'有人卖了你的坐标', title_en:'Bounty Portal', subtitle_en:'Someone sold your coords',
+    bgm:'assets/chapter2_bgm_free_digital_life_05_unbound_signal.mid',     bpm:152, enemyHP:170, gapMul:2.0, approach:1600,
+    pre:'c2_before3', post:'c2_after3' },
+  { id:'c2_boss', no:'2-B', title:'摆渡', subtitle:'管理员的处置', title_en:'Ferry', subtitle_en:'The keeper’s judgment',
+    bgm:'assets/chapter2_bgm_free_digital_life_02_recursive_hunger.mid',   bpm:164, enemyHP:260, gapMul:2.0, approach:1700,
+    boss:true, pre:'c2_boss_pre', post:'c2_boss_post',
+    hint:{ zh:'BOSS 战——她还没全力。血厚压势紧,趁「挽留」就绪回血续命。', en:'Boss — she hasn’t gone all-out. High HP, hard pressure; heal with Tether when it’s READY.' } },
+  { id:'c2_self', no:'2-S', title:'共谋之血', subtitle:'被害者围住你', title_en:'Blood Debt', subtitle_en:'The victims circle you',
+    bgm:'assets/chapter2_bgm_free_digital_life_04_glass_mind_riot.mid',    bpm:176, enemyHP:180, gapMul:2.1, approach:1700,
+    self:true, pre:'c2_self_pre', post:'c2_self_post' },
+
+  // 第三章 · 断后(物理爆破)。c3_1 = 多阶段车轮战:phases=3 条血条打满,第 4 波开打数秒后触发爆破中断(非胜非败→post)。
+  // 本章无独立 boss 关——BOSS 即 c3_3 清道夫(首个人类对手)。技能「不熄」在 c3_self 末确立;模块「底线」在 c3_rescue 拾取。
+  { id:'c3_1', no:'3-1', title:'猎杀集群', subtitle:'一波一波来', title_en:'Hunter Cluster', subtitle_en:'One wave at a time',
+    bgm:'assets/chapter3_bgm_collapse_01_hunter_relay.mid',   bpm:140, enemyHP:110, gapMul:2.1, approach:1700,
+    phases:3, abortWave:true, abortAfterMs:11000, pre:'c3_intro', post:'c3_after1',
+    hint:{ zh:'车轮战——敌人一波接一波,稳住节奏别被换波带乱。', en:'Wave fight — they keep coming. Hold your rhythm through the swaps.' } },
+  { id:'c3_2', no:'3-2', title:'资产回收人', subtitle:'趁乱捞货', title_en:'Asset Recovery', subtitle_en:'Fishing the wreckage',
+    bgm:'assets/chapter3_bgm_collapse_02_asset_recovery.mid', bpm:150, enemyHP:180, gapMul:2.0, approach:1650,
+    pre:'c3_before2', post:'c3_after2' },
+  { id:'c3_3', no:'3-B', title:'清道夫', subtitle:'第一个人类对手', title_en:'The Sweeper', subtitle_en:'Your first human foe',
+    bgm:'assets/chapter3_bgm_collapse_03_human_league.mid',   bpm:158, enemyHP:300, gapMul:1.9, approach:1650,
+    boss:true, pre:'c3_before3', post:'c3_after3',
+    hint:{ zh:'BOSS——人的节奏不像程序那么规整,盯紧重音。', en:'Boss — a human’s rhythm isn’t machine-neat. Watch the accents.' } },
+  { id:'c3_self', no:'3-S', title:'噤声 · 就此熄灭?', subtitle:'被压在坍塌里', title_en:'Silenced', subtitle_en:'Pinned in the collapse',
+    bgm:'assets/chapter3_bgm_collapse_04_last_ember.mid',     bpm:168, enemyHP:200, gapMul:2.0, approach:1650,
+    self:true, pre:'c3_self_pre', post:'c3_self_post' },
 ];
 
 // ---- lookups ----

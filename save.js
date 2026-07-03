@@ -4,8 +4,8 @@ const KEY = 'musicfight_save_v1';   // storage key kept stable; internal `ver` t
 
 export function defaultSave(){
   return { ver:2, tutorialDone:false,
-           clearedLevels:[], unlockedMax:0, lastLevel:0, seenScenes:[],
-           bestScore:0, settings:{} };
+           clearedLevels:[], unlockedMax:0, lastLevel:0, seenScenes:[], unlockedSkills:[],
+           equipped:{A:null,B:null,auto:null}, bestScore:0, settings:{} };
 }
 
 function migrate(d){
@@ -20,6 +20,8 @@ function migrate(d){
   out.ver = 2;
   if(!Array.isArray(out.clearedLevels)) out.clearedLevels = [];
   if(!Array.isArray(out.seenScenes))    out.seenScenes = [];
+  if(!Array.isArray(out.unlockedSkills)) out.unlockedSkills = [];
+  if(typeof out.equipped!=='object' || out.equipped===null) out.equipped = {A:null,B:null,auto:null};
   out.unlockedMax = Math.max(0, out.unlockedMax|0);
   out.lastLevel   = Math.max(0, out.lastLevel|0);
   if(typeof out.settings!=='object' || out.settings===null) out.settings = {};

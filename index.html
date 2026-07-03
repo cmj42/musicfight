@@ -78,6 +78,11 @@
       <option value="image">挥动速度 (xy)</option>
       <option value="depth">向前/深度 (z)</option>
     </select></div>
+  <div class="row"><label>识别模型</label>
+    <select id="cfgPoseModel">
+      <option value="full">标准 (更准, 推荐)</option>
+      <option value="lite">轻量 (低配置)</option>
+    </select></div>
   <div class="row"><label>灵敏度(阈值)</label><input id="cfgTrig" type="range" min="1" max="20" step="0.5"><span class="val" id="vTrig"></span></div>
   <div class="row"><label>平滑(防抖)</label><input id="cfgSmooth" type="range" min="0.3" max="5" step="0.1"><span class="val" id="vSmooth"></span></div>
   <div class="tip">自适应滤波：静止更稳、出拳不拖延。还嫌抖→「平滑」调小；嫌延迟→调大。阈值设在中央柱子"静止值"之上一点。</div>
@@ -91,10 +96,11 @@
   <div class="sep"></div>
   <h3>节奏 Rhythm</h3>
   <div class="row"><label>BPM</label><input id="cfgBpm" type="range" min="60" max="160" step="1"><span class="val" id="vBpm"></span></div>
-  <div class="row"><label>球速(ms)</label><input id="cfgApproach" type="range" min="600" max="3000" step="50"><span class="val" id="vApproach"></span></div>
+  <div class="row"><label>球速倍率</label><input id="cfgApproachMul" type="range" min="0.4" max="1.2" step="0.05"><span class="val" id="vApproachMul"></span></div>
   <div class="row"><label>校准(ms)</label><input id="cfgCal" type="range" min="-300" max="300" step="5"><span class="val" id="vCal"></span></div>
   <div class="row"><label>判定窗(ms)</label><input id="cfgWin" type="range" min="80" max="350" step="5"><span class="val" id="vWin"></span></div>
-  <div class="tip">校准: 若总是判 Late 就调小, 总是 Early 就调大。</div>
+  <button class="pbtn" id="calibBtn">🥁 节拍校准向导 — 跟着节拍打 10 拳自动测延迟</button>
+  <div class="tip">校准: 若总是判「晚了」就调小, 总是「早了」就调大；用上面的向导可自动完成。<br>球速倍率: 越小球越快、中央判定区画得越宽(时间窗不变, 只是更好读), 但反应时间变短。飞行时长永远吸附整数拍。</div>
 
   <div class="sep"></div>
   <h3>技能 Skills</h3>
@@ -102,6 +108,7 @@
     <select id="cfgSkillA">
       <option value="pyre">燔 / 伤害</option>
       <option value="tether">挽留 / 回血</option>
+      <option value="ember">不熄 / 锁血</option>
       <option value="effigy">拟生 / 构造</option>
       <option value="severance">断线 / 破控</option>
     </select></div>
@@ -109,10 +116,21 @@
     <select id="cfgSkillB">
       <option value="tether">挽留 / 回血</option>
       <option value="pyre">燔 / 伤害</option>
+      <option value="ember">不熄 / 锁血</option>
       <option value="effigy">拟生 / 构造</option>
       <option value="severance">断线 / 破控</option>
     </select></div>
-  <div class="tip">MIDI 只给 A/B 两条技能触发轨；这里决定触发轨到点时实际使用哪个技能音色和效果。</div>
+  <div class="row"><label>伙伴</label>
+    <select id="cfgAuto">
+      <option value="">无</option>
+      <option value="strike">余震 / 连击补刀</option>
+      <option value="sync">回写 / 连击回血</option>
+      <option value="guard">底线 / 濒死保命</option>
+      <option value="aegis">熔断 / 危机减伤</option>
+      <option value="buffer">补帧 / 连击保护</option>
+      <option value="overclock">超频 / 增幅</option>
+    </select></div>
+  <div class="tip">MIDI 只给 A/B 两条技能触发轨；这里决定触发轨到点时实际使用哪个技能音色和效果。伙伴自动技能在战斗中按条件自动触发。</div>
 
   <div class="sep"></div>
   <h3>音乐 Music</h3>
@@ -206,8 +224,10 @@ const cfg = {
   lineRight:0.15,         // shoulder-widths LEFT of center: right hand must cross past it
   requireCross:true,      // require the hand to cross its line (off = any fast swing counts)
   bpm:BATTLE_BPM, approach:1600, calibration:-120,  // calibration: punch-input latency compensation (ms)
+  approachMul:0.75,       // 球速倍率:飞行时间 = 关卡预设 × 此值(小=球快=判定区更宽,时间窗不变),最少 2 拍
   attackGap:60000/BATTLE_BPM*1.5,   // 1.5 music beats (~682ms) — attacks lock to the BGM's 8th-note grid
-  goodWindow:280, perfectWindow:120,         // forgiving casual hit windows
+  goodWindow:280, perfectWindow:120,         // forgiving casual hit windows (judgment is time-based, symmetric around the beat)
+  poseModel:'full',       // 'full' = 更准(默认) | 'lite' = 低配置省资源
   mirror:true, debug:false,
   lang:'zh',              // 'zh' | 'en' — set from saveData.settings on boot
 };
@@ -215,7 +235,7 @@ const cfg = {
 function T(key, ...args){ return i18nT(key, cfg.lang, ...args); }
 // Control-tuning params that the Settings screen persists to localStorage.
 const TUNABLE_KEYS = ['mode','triggerLevel','resetLevel','minCutoff','beta','dCutoff','velWindow',
-  'minGap','trajWindow','lineHigh','lineLow','lineLeft','lineRight','requireCross','calibration','mirror'];
+  'minGap','trajWindow','lineHigh','lineLow','lineLeft','lineRight','requireCross','calibration','mirror','poseModel','approachMul'];
 function applySavedSettings(d){
   const s = (d && d.settings) || {};
   if(s.lang==='zh'||s.lang==='en') cfg.lang = s.lang;
@@ -466,9 +486,22 @@ async function loadBattleMidi(){
     document.getElementById('musicName').textContent =
       `当前: 内置 MIDI 兜底 · 实时合成 · 技能触发 ${midiSong.triggerEvents.length} 个`;
   }
+  applySongTempo();
 }
 // load a specific level's BGM (per-song tempo). fire-and-forget; getready gives time to fetch.
 let currentBgmUrl = BATTLE_MIDI_URL;
+let currentGapMul=1.5, baseApproach=1600;      // 关卡预设,供曲子加载完后按真实曲速重算
+// ★合拍核心:一切节奏参数(拍宽/攻击网格/飞行时长)都锁在 MIDI 文件自己的曲速上,
+//   而不是关卡里手填的 bpm——否则拍脉冲、判定区呼吸和音乐会慢慢错开。
+function applySongTempo(){
+  if(!midiSong || !midiSong.tempoUs) return;
+  const bpm=60000000/midiSong.tempoUs;
+  if(isFinite(bpm) && bpm>40 && bpm<260){
+    cfg.bpm=Math.round(bpm*100)/100;
+    cfg.attackGap=60000/cfg.bpm*currentGapMul;
+    cfg.approach=snapApproach(baseApproach);   // 飞行时长(×球速倍率)重吸附整数拍 → 出生点也踩在拍上
+  }
+}
 async function loadLevelBgm(url){
   currentBgmUrl = url || BATTLE_MIDI_URL;
   try{
@@ -482,6 +515,7 @@ async function loadLevelBgm(url){
     document.getElementById('musicName').textContent =
       `当前: 内置兜底(载入失败) · 技能触发 ${midiSong.triggerEvents.length} 个`;
   }
+  applySongTempo();
 }
 function startMidiSong(){
   if(!midiSong || usingSong) return false;
@@ -511,9 +545,11 @@ function scheduleTone(time,freq,dur,gain,type='sawtooth',pan=0,filterFreq=3600){
 }
 function scheduleKick(time,vel){
   const t=Math.max(time,actx.currentTime+0.005), g=actx.createGain(), o=actx.createOscillator();
-  o.type='sine'; o.frequency.setValueAtTime(120,t); o.frequency.exponentialRampToValueAtTime(42,t+0.11);
-  g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(0.22*vel,t+0.004); g.gain.exponentialRampToValueAtTime(0.0001,t+0.30);
-  o.connect(g); connectOut(g,0); o.start(t); o.stop(t+0.34);
+  o.type='sine'; o.frequency.setValueAtTime(160,t); o.frequency.exponentialRampToValueAtTime(44,t+0.10);
+  g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(0.46*vel,t+0.004); g.gain.exponentialRampToValueAtTime(0.0001,t+0.26);
+  o.connect(g); connectOut(g,0); o.start(t); o.stop(t+0.32);
+  scheduleNoise(t,0.028,0.085*vel,0,'highpass',4200);   // 鼓槌点击 → 低鼓更"顶",拍子更清楚
+  scheduleTone(t,200,0.05,0.07*vel,'square',0,1500);    // 中频"敲击感"瞬态 → 更有攻击性
 }
 function noiseBuf(){
   if(noiseBuffer) return noiseBuffer;
@@ -531,23 +567,25 @@ function scheduleNoise(time,dur,gain,pan=0,filterType='highpass',freq=2200){
 }
 function scheduleDrum(ev,time){
   const vel=Math.pow(ev.velocity/127,1.1);
-  if(ev.pitch===36) scheduleKick(time,vel);
-  else if(ev.pitch===38 || ev.pitch===37){ scheduleNoise(time,0.18,0.12*vel,0.02,'bandpass',1800); scheduleTone(time,190,0.12,0.045*vel,'triangle',0.02,1200); }
-  else if(ev.pitch===42) scheduleNoise(time,0.055,0.035*vel,-0.18,'highpass',5200);
-  else if(ev.pitch===46) scheduleNoise(time,0.20,0.045*vel,-0.12,'highpass',4600);
-  else if(ev.pitch===49 || ev.pitch===51) scheduleNoise(time,0.85,0.055*vel,0.16,'highpass',3200);
-  else scheduleTone(time,midiHz(ev.pitch),0.22,0.045*vel,'triangle',0.1,900);
+  if(ev.pitch===36 || ev.pitch===35) scheduleKick(time,vel);
+  else if(ev.pitch===38 || ev.pitch===37 || ev.pitch===40){ scheduleNoise(time,0.16,0.25*vel,0.02,'bandpass',1900); scheduleNoise(time,0.05,0.095*vel,0.02,'highpass',4400); scheduleTone(time,195,0.11,0.08*vel,'triangle',0.02,1300); }
+  else if(ev.pitch===42) scheduleNoise(time,0.055,0.045*vel,-0.18,'highpass',5200);
+  else if(ev.pitch===46) scheduleNoise(time,0.20,0.055*vel,-0.12,'highpass',4600);
+  else if(ev.pitch===49 || ev.pitch===51) scheduleNoise(time,0.85,0.050*vel,0.16,'highpass',3200);
+  else scheduleTone(time,midiHz(ev.pitch),0.22,0.055*vel,'triangle',0.1,900);
 }
 function scheduleSkillMidiCue(slot,time,dur,velocity){
-  const def=skillDefForSlot(slot), vel=Math.pow(velocity/127,1.05);
+  if(noSkills) return;                             // 本战无手动技能 → 触发轨完全不渲染
+  const def=skillDefForSlot(slot); if(!def) return; const vel=Math.pow(velocity/127,1.05);
+  // 混音:技能轨提示音压低(旧值太响,盖过节拍——"慢的叮比快的节拍还大声")
   if(def.effect && def.effect.type==='heal'){
-    scheduleTone(time,659.25,0.16,0.052*vel,'triangle',0.22,5200);
-    scheduleTone(time+0.07,880,0.18,0.044*vel,'sine',0.18,6200);
-    scheduleTone(time+0.15,1174.66,0.22,0.035*vel,'triangle',0.26,7000);
+    scheduleTone(time,659.25,0.14,0.026*vel,'triangle',0.22,5200);
+    scheduleTone(time+0.07,880,0.15,0.021*vel,'sine',0.18,6200);
+    scheduleTone(time+0.15,1174.66,0.18,0.016*vel,'triangle',0.26,7000);
   }else{
-    scheduleTone(time,123.47,0.28,0.105*vel,'sawtooth',-0.18,1200);
-    scheduleTone(time+0.025,246.94,0.20,0.070*vel,'square',-0.12,1800);
-    scheduleTone(time+0.055,987.77,0.12,0.040*vel,'sawtooth',-0.05,3800);
+    scheduleTone(time,123.47,0.26,0.062*vel,'sawtooth',-0.18,1200);
+    scheduleTone(time+0.025,246.94,0.18,0.042*vel,'square',-0.12,1800);
+    scheduleTone(time+0.055,987.77,0.10,0.020*vel,'sawtooth',-0.05,3800);
   }
 }
 function playSkillStepSfx(step){                 // crisp rising blip each time you hit a step right
@@ -589,12 +627,14 @@ function playSkillOpenCue(def){                   // a few beats of the skill's 
 function scheduleMidiEvent(ev,audioTime){
   if(ev.slot){ scheduleSkillMidiCue(ev.slot,audioTime,ev.durationSec,ev.velocity); return; }
   const vel=Math.pow(ev.velocity/127,1.15), freq=midiHz(ev.pitch), dur=ev.durationSec;
+  // 混音重配平:节奏声部(riff/bass)抬高、长音声部(pad/lead)压低——拍子要压得住"叮"
   if(ev.channel===9){ scheduleDrum(ev,audioTime); return; }
-  if(ev.channel===0) scheduleTone(audioTime,freq,dur,0.036*vel,'sawtooth',-0.42,1900);
-  else if(ev.channel===1) scheduleTone(audioTime,freq,dur,0.070*vel,'square',0,900);
-  else if(ev.channel===2) scheduleTone(audioTime,freq,dur,0.021*vel,'sawtooth',0.32,2600);
-  else if(ev.channel===3) scheduleTone(audioTime,freq,dur,0.032*vel,'triangle',-0.2,4800);
-  else if(ev.channel===4) scheduleTone(audioTime,freq,dur,0.045*vel,'square',0.1,2200);
+  const dampen=dur>1.2?0.7:1;                                     // 长音自动再衰减,防止糊满
+  if(ev.channel===0) scheduleTone(audioTime,freq,dur,0.056*vel*dampen,'sawtooth',-0.42,2100);
+  else if(ev.channel===1) scheduleTone(audioTime,freq,dur,0.110*vel*dampen,'square',0,1000);
+  else if(ev.channel===2) scheduleTone(audioTime,freq,dur,0.016*vel*dampen,'sawtooth',0.32,2400);
+  else if(ev.channel===3) scheduleTone(audioTime,freq,dur,0.022*vel*dampen,'triangle',-0.2,3800);
+  else if(ev.channel===4) scheduleTone(audioTime,freq,dur,0.040*vel*dampen,'square',0.1,2200);
 }
 function scheduleMidi(){
   if(!usingMidi || !midiSong || !actx || phase!=='game') return;
@@ -612,20 +652,111 @@ function scheduleMidi(){
 }
 
 /* ============================================================
+   对话 BGM(环境声) — 过场/自检/教学时的无缝循环底噪。
+   程序化生成(不需要 MIDI 文件),每章一个主题,音量压得很低不抢戏;
+   玩家停在对话里多久都不会断。剧本可用 scene.ambient 覆盖主题。
+   ============================================================ */
+function makeAmbientSong(theme){
+  const ev=[];
+  const tone=(t,f,d,g,type='sine',pan=0,filt=2600)=>ev.push({t,f,d,g,type,pan,filt});
+  const wash=(t,d,g,filt=900,pan=0,ftype='bandpass')=>ev.push({t,d,g,pan,filt,ftype,noise:true});
+  let dur=16;
+  if(theme==='intranet'){            // 序章·公司内网:冷、压抑的机房低鸣 + 稀疏的信号灯闪烁
+    dur=24;
+    for(const [t,f] of [[0,110],[8,103.83],[16,110]])       tone(t,f,7.5,0.030,'sawtooth',-0.1,700);
+    for(const [t,f] of [[0,220],[8,207.65],[16,220]])       tone(t,f,7.5,0.014,'sawtooth',0.1,1100);
+    for(const [t,f] of [[0,329.63],[8,311.13],[16,329.63]]) tone(t+0.05,f,7.0,0.011,'triangle',0.2,2200);
+    for(const t of [3.5,7.2,11.5,15.2,19.5,22.8]) tone(t,1318.5,0.09,0.020,'square',0.3,5200);
+    for(const t of [5.8,13.8,21.8])               tone(t,987.77,0.12,0.014,'sine',-0.25,6000);
+    for(const t of [0,12]) wash(t,5,0.006,600,-0.05);
+  } else if(theme==='city'){         // 第一章·公网都市:霓虹雨夜,忧郁小调铺底 + 远处钟音
+    dur=16;
+    for(const [t,fs] of [[0,[146.83,220,349.23,523.25]],[8,[116.54,174.61,293.66,440]]])
+      fs.forEach((f,i)=>tone(t+i*0.06,f,7.6,i<2?0.024:0.012,i<2?'sawtooth':'triangle',(i%2?0.18:-0.18),i<2?900:2600));
+    for(const [t,f] of [[4.0,587.33],[6.5,523.25],[12.0,440],[14.5,349.23]]) tone(t,f,1.6,0.020,'triangle',0.22,3800);
+    for(const t of [2,10]) wash(t,4.5,0.007,800,0.1);
+  } else if(theme==='wild'){         // 第二章·自由地:野生数字生命——有机拨弦 + 呼吸般的低鸣
+    dur=16;
+    for(const [t,f] of [[0,130.81],[8,146.83]]) tone(t,f,7.8,0.026,'sawtooth',-0.12,650);
+    for(const [t,f] of [[0,392],[8,440]])       tone(t,f,7.8,0.010,'triangle',0.15,2400);
+    const pk=[261.63,293.66,329.63,392,440,523.25];
+    [[0.7,0],[2.6,2],[4.1,4],[5.9,1],[7.4,3],[8.9,5],[10.6,2],[12.1,0],[13.7,4],[15.1,1]]
+      .forEach(([t,i])=>tone(t,pk[i],0.5,0.022,'square',(i%2?0.28:-0.28),3000));
+    for(const t of [3.9,11.9]) wash(t,2.2,0.008,2600,0);
+  } else {                           // mind·自我探索:悬置和声的气声微光 + 心跳
+    dur=16;
+    for(const [t,fs] of [[0,[196,293.66,392,440]],[8,[174.61,261.63,349.23,523.25]]])
+      fs.forEach((f,i)=>tone(t+i*0.08,f,7.4,0.012,'sine',(i%2?0.2:-0.2),3200));
+    for(const t of [0,4,8,12]){ tone(t,55,0.28,0.040,'sine',0,300); tone(t+0.32,55,0.22,0.028,'sine',0,300); }
+    for(const t of [2,6,10,14]) wash(t,3.0,0.005,7000,0.1,'highpass');
+  }
+  ev.sort((a,b)=>a.t-b.t);
+  return {dur, ev};
+}
+let ambient=null;                                   // {key, song, startSec, idx, loop}
+const AMBIENT_PHASES=['cutscene','menu_state','getset','tutorial','skilltutorial','intro'];
+function ambientThemeFor(s){
+  if(s && s.ambient) return s.ambient;              // 剧本指定优先
+  const bg=s && s.bg;
+  if(bg==='intranet') return 'intranet';
+  if(bg==='mind'||bg==='mind_shaking') return 'mind';
+  if(bg==='slum') return 'wild';
+  if(bg==='city') return 'city';
+  const ch=chapterOfLevel(currentLevel);            // 没写 bg → 按章节兜底
+  if(ch && ch.id==='ch2') return 'wild';
+  if(ch && ch.id==='ch1') return 'city';
+  return 'intranet';
+}
+function startAmbient(theme){
+  if(!actx) return;
+  if(ambient && ambient.key===theme) return;        // 同主题连场 → 不打断,无缝续播
+  ambient={key:theme, song:makeAmbientSong(theme), startSec:actx.currentTime+0.15, idx:0, loop:0};
+}
+function stopAmbient(){ ambient=null; }             // 已排程的音自然衰减
+function scheduleAmbient(){
+  if(!ambient||!actx||paused) return;
+  if(!AMBIENT_PHASES.includes(phase)) return;       // 战斗/菜单等阶段静默(不销毁,回对话续播)
+  const s=ambient.song; if(!s.ev.length) return;
+  const until=actx.currentTime-ambient.startSec+0.5;
+  while(true){
+    const e=s.ev[ambient.idx], t=ambient.loop*s.dur+e.t;
+    if(t>until) break;
+    const at=ambient.startSec+t;
+    if(at>actx.currentTime-0.05){
+      if(e.noise) scheduleNoise(at,e.d,e.g,e.pan,e.ftype||'bandpass',e.filt);
+      else scheduleTone(at,e.f,e.d,e.g,e.type,e.pan,e.filt);
+    }
+    ambient.idx++;
+    if(ambient.idx>=s.ev.length){ ambient.idx=0; ambient.loop++; }
+  }
+}
+
+/* ============================================================
    POSE
    ============================================================ */
 let pose=null, lastVideoT=-1, det=null, detLatency=0;
 
+const POSE_MODELS={     // full 明显更准(动作识别不准就用它);lite 留给低配置机器
+  lite:"https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+  full:"https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task"
+};
+let poseLoading=false;
 async function initPose(){
   const fileset = await FilesetResolver.forVisionTasks(
     "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
-  pose = await PoseLandmarker.createFromOptions(fileset, {
-    baseOptions:{
-      modelAssetPath:"https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
-      delegate:"GPU"
-    },
+  const build=(model)=>PoseLandmarker.createFromOptions(fileset, {
+    baseOptions:{ modelAssetPath:POSE_MODELS[model]||POSE_MODELS.full, delegate:"GPU" },
     runningMode:"VIDEO", numPoses:1
   });
+  try{ pose = await build(cfg.poseModel); }
+  catch(e){ console.warn('pose model "'+cfg.poseModel+'" failed → lite:',e); cfg.poseModel='lite'; pose = await build('lite'); }
+}
+async function reinitPose(){                        // 设置里切换模型(战斗外随时可切)
+  if(poseLoading) return; poseLoading=true;
+  toast(cfg.lang==='en'?'switching model…':'切换识别模型中…');
+  try{ const old=pose; await initPose(); lastVideoT=-1; if(old&&old.close){ try{old.close();}catch(e){} } toast(cfg.lang==='en'?'model ready':'识别模型已切换'); }
+  catch(e){ toast('模型切换失败: '+e.message); }
+  finally{ poseLoading=false; }
 }
 
 // landmark indices
@@ -656,6 +787,8 @@ const hands = { left:newHand(), right:newHand() };
 let balls=[], particles=[], beams=[], pops=[];
 let score=0, combo=0, maxCombo=0, enemyHP=MAX_ENEMY_HP, playerHP=MAX_PLAYER_HP, shake=0;
 let nextStep=0, gameOver=false, win=false;
+let atkChart=[], atkIndex=0, atkLoop=0;   // MIDI-derived enemy attack timeline (built per level)
+let enemyStyle='normal';                  // 'normal'(紫乱线) | 'boss'(红乱线) | 'self'(主角光球+彩色乱线)
 let stats={perfect:0,good:0,miss:0};
 
 // ---- phase / tutorial ----
@@ -675,14 +808,24 @@ let battleHint='', hintUntil=0;         // brief on-screen hint at battle start 
 let stateReturn=null;                   // where the 状态/自检 screen returns to
 let winAutoAt=0;                         // story win auto-advances at this wall-clock time (no menu)
 
+let hpLockUntil=0;                            // 「不熄」血线锁定截止(game ms)
+let battleWave=1, waveBannerTxt='', waveBreakUntil=0;   // 多阶段车轮战(c3_1 等):当前波次/换波横幅
+let abortArmed=false, abortDeadline=0, aborting=false, abortUntil=0;   // 爆破中断事件
+let fadeFrom=0; const FADE_MS=650;            // 黑屏过渡:章节/关卡/过场切换时从纯黑淡入
+function triggerFade(){ fadeFrom=performance.now(); }
+function snapToBeat(ms){ const beat=60000/(cfg.bpm||120); return Math.max(beat, Math.round(ms/beat)*beat); }   // 把光球飞行时长吸附到整数拍 → 落点踩在节拍网格上
+function snapApproach(ms){ const beat=60000/(cfg.bpm||120); return Math.max(beat*2, snapToBeat(ms*(cfg.approachMul||1))); }   // 关卡预设×球速倍率,吸附整数拍,下限 2 拍
 function startLevel(idx){
   if(idx<0 || idx>=LEVELS.length){ phase='menu'; return; }   // ran past the chapter end
+  triggerFade();                                             // 关卡/章节之间的黑屏过渡
   currentLevel=idx;
   const lv=LEVELS[idx];
   levelMaxHP=lv.enemyHP||MAX_ENEMY_HP;
   noSkills=!!lv.noSkills;                                        // 序章关卡技能未解锁 → 无技能
-  cfg.bpm=lv.bpm||BATTLE_BPM; cfg.attackGap=60000/cfg.bpm*(lv.gapMul||1.5);   // bigger gapMul = sparser = easier
-  cfg.approach=lv.approach||1600;                               // ball travel time: bigger = more reaction time
+  enemyStyle = lv.self ? 'self' : (lv.boss ? 'boss' : 'normal'); // 敌人外观:自我探索 / BOSS / 普通
+  currentGapMul=lv.gapMul||1.5; baseApproach=lv.approach||1600;   // 存下预设,BGM 加载完按真实曲速重算(applySongTempo)
+  cfg.bpm=lv.bpm||BATTLE_BPM; cfg.attackGap=60000/cfg.bpm*currentGapMul;   // bigger gapMul = sparser = easier
+  cfg.approach=snapApproach(baseApproach);                     // 飞行时长(×球速倍率)吸附整数拍
   battleHint=lvHint(lv, cfg.lang);                             // brief start-of-battle hint (shown a few sec)
   loadLevelBgm(lv.bgm);                                          // async; battle starts after pre-scene/countdown
   saveData.lastLevel=idx; writeSaveData(saveData);              // autosave: remember where we are
@@ -705,24 +848,46 @@ function proceedAfterWin(){
 function playScene(id){
   const s=SCENES[id];
   if(!s){ onSceneEnd(id, null); return; }   // missing scene → skip gracefully
+  triggerFade();                            // 过场切入时也从黑色淡入
   scene={id, data:s}; sceneIdx=0; sceneAdvT=performance.now()+250; phase='cutscene';
+  startAmbient(ambientThemeFor(s));         // 对话 BGM:按场景/章节选主题,循环播放
+  lineGrantCheck();                         // 第一行就带 grant 的情况
+}
+function applyGrant(grant){                               // 剧情发技能/模块:解锁 + 自动装到第一个空槽(玩家可在自检里改)
+  if(!grant) return;
+  const glist=Array.isArray(grant)?grant:[grant];         // 支持一次掉多个:主角手动技能 + 伙伴自动模块
+  saveData.unlockedSkills=saveData.unlockedSkills||[];
+  for(const g of glist){
+    if(!saveData.unlockedSkills.includes(g)) saveData.unlockedSkills.push(g);
+    if(AUTO_SKILLS[g]){ if(!equippedAuto) equippedAuto=g; }                // 伙伴模块 → 只进自动槽
+    else if(SKILLS[g] && equippedSkills.A!==g && equippedSkills.B!==g){
+      if(!equippedSkills.A) equippedSkills.A=g; else if(!equippedSkills.B) equippedSkills.B=g;
+    }
+  }
+  persistLoadout();
+}
+function lineGrantCheck(){                                // 台词行内 grant:该行一出现立刻生效——
+  const ln=scene && scene.data.lines[sceneIdx];           // 玩家紧接着在对话里平拳交叉开自检,就能看到并装上
+  if(ln && ln.grant) applyGrant(ln.grant);
 }
 function advanceScene(){
   if(!scene) return;
   sceneIdx++;
-  if(sceneIdx < scene.data.lines.length) return;
-  const id=scene.id, next=scene.data.next; scene=null;
-  markSceneSeen(saveData,id); writeSaveData(saveData);
-  onSceneEnd(id, next);
+  if(sceneIdx < scene.data.lines.length){ lineGrantCheck(); return; }
+  const id=scene.id, d=scene.data, next=d.next, stateNext=d.stateNext, grant=d.grant; scene=null;
+  markSceneSeen(saveData,id);
+  applyGrant(grant);
+  writeSaveData(saveData);
+  onSceneEnd(id, next, stateNext);
 }
 function sceneBack(){ if(scene) sceneIdx=Math.max(0, sceneIdx-1); }   // 双拳上击 = 回上一句(防误触)
-function onSceneEnd(id, next){
+function onSceneEnd(id, next, stateNext){
   if(next==='battle'){ beginLevelBattle(); }              // current level's battle
   else if(next==='tutorial'){ storyTeaching=true; phase='tutorial'; tutStep=0; tutReps=0; tutFlash=null; tutHoldUntil=0; }  // 碎片教学
   else if(next==='level'){ startLevel(currentLevel+1); }  // advance to next level
-  else if(next==='menu_state'){ openStateMenu(()=>playScene('after_first')); }   // 自检界面 → 关掉后接 after_first
+  else if(next==='menu_state'){ openStateMenu(()=>{ if(stateNext) playScene(stateNext); else phase='menu'; }); }   // 自检界面 → 关掉后接 stateNext 指定的过场
   else if(next && SCENES[next]){ playScene(next); }       // chain another scene
-  else { phase='menu'; }
+  else { stopAmbient(); phase='menu'; }
 }
 let getReadyWall=0;                // wall-clock ms when the countdown started
 const TUT_NEED=2;                  // successful reps required per move
@@ -765,23 +930,47 @@ const SKILLS={
     windowMs:5000, effect:{type:'damage',value:66}, chapter:4, trauma:'被操纵', trauma_en:'Manipulation',
     desc:'扯断操线——破控反击(完整设定:克制关底「覆写」)。', desc_en:'Cut the strings — break control (full design: counters the final overwrite).',
     memory:'「所以我要把线，扯断。」', memory_en:'"So I cut the strings."' },
+  ember:{     id:'ember',     name:'不熄', name_en:'Ember',     short:'不熄', timbre:'ember_drone',
+    triggerLane:'low',  sequence:[{hand:'left',lane:'low'},{hand:'right',lane:'low'},{hand:'left',lane:'high'}],
+    windowMs:5200, effect:{type:'lock',value:9000}, chapter:3, trauma:'噤声', trauma_en:'Silenced',
+    desc:'燃而不熄——一段时间内血线锁定，谁也别想把它按到零。', desc_en:'A fire that will not die — your HP cannot drop for a while.',
+    memory:'「还没轮到我熄灭。」', memory_en:'"It is not my turn to go out."' },
 };
 // 伙伴自动技能(章节 BOSS 掉落,1 个槽,触发各异)—— 序章未解锁。纯条件监听器,无技能窗。
+// 命名 = 碎片的「系统机能」口吻(赛博):回写/熔断/补帧/超频。id 不改,旧存档兼容。
 const AUTO_SKILLS={
-  sync:     { id:'sync',     name:'同步', name_en:'Sync',      trigger:'combo',   desc:'连击到阈值 → 自动回血。', desc_en:'On combo → auto-heal.' },
-  aegis:    { id:'aegis',    name:'庇护', name_en:'Aegis',     trigger:'lowHP',   desc:'血量危急 → 护盾减伤。',   desc_en:'When low → shield.' },
-  buffer:   { id:'buffer',   name:'缓冲', name_en:'Buffer',    trigger:'perfect', desc:'完美命中 → 连击保护。',   desc_en:'On perfects → combo guard.' },
-  overclock:{ id:'overclock',name:'过载', name_en:'Overclock', trigger:'noMiss',  desc:'稳住不失误 → 全程增幅。', desc_en:'On a clean streak → amp.' },
+  strike:   { id:'strike',   name:'余震', name_en:'Aftershock', trigger:'combo',
+    comboEvery:10, dmgFrac:0.05,               // 敌方总血的百分比 → 后期不贬值(远小于「燔」的自损换伤)
+    desc:'连击每满 10 → 余震补一击(敌方总血 5%)。', desc_en:'Every 10th combo → an aftershock strike (5% of enemy max HP).' },
+  sync:     { id:'sync',     name:'回写', name_en:'Writeback', trigger:'combo',
+    comboEvery:20, healPerSec:2.4, durMs:6000, cdMs:16000,
+    desc:'连击达标 → 记忆回写，持续回血。', desc_en:'Combo streak → writes data back: regen.' },
+  aegis:    { id:'aegis',    name:'熔断', name_en:'Failsafe',  trigger:'lowHP',
+    hpFrac:0.32, dmgMul:0.45, durMs:8000, cdMs:26000,
+    desc:'血量危急 → 熔断保护，伤害减半。', desc_en:'At critical HP → failsafe trips: damage halved.' },
+  buffer:   { id:'buffer',   name:'补帧', name_en:'Reframe',   trigger:'perfect',
+    perfEvery:6, maxCharges:1,
+    desc:'完美命中蓄能 → 失误被补帧，连击不断。', desc_en:'Perfects charge it → a miss gets reframed: combo holds.' },
+  overclock:{ id:'overclock',name:'超频', name_en:'Overclock', trigger:'noMiss',
+    armMs:10000, minHits:8, scoreMul:1.5, dmgBonus:1,
+    desc:'持续不失误 → 超频运转，得分伤害提升。', desc_en:'Stay clean → overclocked: score & damage up.' },
+  guard:    { id:'guard',    name:'底线', name_en:'Lastline',  trigger:'lethal',
+    desc:'濒死时守住最后一格血(每战一次)。', desc_en:'Once per battle, survive lethal damage at 1 HP.' },
 };
-const SKILL_ORDER=['tether','pyre','effigy','severance'];   // 主角四技能展示顺序(对应四章)
-const AUTO_ORDER=['sync','aegis','buffer','overclock'];      // 伙伴四自动技能
+const SKILL_ORDER=['tether','pyre','ember','severance','effigy'];   // 主角技能展示顺序(1挽留 2燔 3不熄 4断线;拟生暂为备用)
+const AUTO_ORDER=['strike','sync','guard','aegis','buffer','overclock'];      // 伙伴自动技能(熔断暂无剧情掉落=备用模块)
 function skillUnlocked(id){ return !!(saveData && saveData.unlockedSkills && saveData.unlockedSkills.includes(id)); }
 let equippedSkills={A:null, B:null};   // 出战带的两个手动技能(序章为空——技能未解锁)
 let equippedAuto=null;                        // 伙伴装上的自动技能(序章用不到)
 let selSlot=null;                             // 已选中的槽:'A'|'B'|'auto'|null
 let stateCol=0, stateRow=0;                   // 光标:列(0=技能轨道 1=可调用模块) / 行
 let stateMsg='', stateMsgT=0;                 // "没有模块" 等临时提示
-function skillDefForSlot(slot){ return SKILLS[equippedSkills[slot]] || SKILLS.pyre; }
+function slotSkillId(slot){
+  if(equippedSkills[slot]) return equippedSkills[slot];
+  if(trainingMode) return slot==='A'?'pyre':'tether';   // 训练模式没有装备界面 → 给两个默认技能
+  return null;
+}
+function skillDefForSlot(slot){ const id=slotSkillId(slot); return id ? SKILLS[id] : null; }   // 空槽返回 null:剧情战未装备就不会触发
 
 /* ============================================================
    STATUS / SELF-CHECK screen — 两列:左=技能轨道(主角A/B + 伙伴自动 + 退出),右=可调用模块。
@@ -806,11 +995,17 @@ function stateRightItems(){                    // 当前选中槽可装的(已�
   return [];
 }
 function openStateMenu(returnFn){ stateReturn=returnFn||null; selSlot=null; stateCol=0; stateRow=0; stateMsg=''; phase='menu_state'; }
+function selfCheckTaught(){ return isSceneSeen(saveData,'after_first1'); }   // 碎片教过自检(左右交叉平击开启状态界面)之后,对话中随时可开
 function closeStateMenu(){ const fn=stateReturn; stateReturn=null; if(fn) fn(); else phase='menu'; }
 function equipToSlot(def){
   if(selSlot==='auto') equippedAuto=def.id;
   else if(selSlot==='A'||selSlot==='B') equippedSkills[selSlot]=def.id;
+  persistLoadout();
 }
+function persistLoadout(){ if(saveData){ saveData.equipped={A:equippedSkills.A, B:equippedSkills.B, auto:equippedAuto}; writeSaveData(saveData); } }
+function restoreLoadout(){ const eq=(saveData && saveData.equipped)||{};
+  equippedSkills={A:(eq.A&&skillUnlocked(eq.A))?eq.A:null, B:(eq.B&&skillUnlocked(eq.B))?eq.B:null};
+  equippedAuto=(eq.auto&&skillUnlocked(eq.auto))?eq.auto:null; }
 function stateConfirm(){
   if(stateCol===0){
     const it=STATE_LEFT[stateRow];
@@ -886,7 +1081,7 @@ function drawStateMenu(now){
 function handLabel(hand){ return hand==='left'?'左':'右'; }
 function laneLabel(lane){ return lane==='high'?'上':lane==='low'?'下':'中'; }
 function moveLabel(m){ return handLabel(m.hand)+laneLabel(m.lane)+'拳'; }
-function triggerLabel(skill){ return skill.triggerLane==='high'?'双拳上击':'双拳下击'; }
+function triggerLabel(skill){ const hi=skill.triggerLane==='high'; return cfg.lang==='en'?(hi?'both fists UP':'both fists DOWN'):(hi?'双拳上击':'双拳下击'); }
 function fallbackTime(bar, step=0){ return (bar*4 + step/4) * (60000/BATTLE_BPM); }
 const FALLBACK_SKILL_EVENTS=[
   {slot:'A',timeMs:fallbackTime(12),label:'SKILL_A_FALLBACK'},
@@ -903,22 +1098,121 @@ let skillState={
   goldWash:0,
 };
 let skillTut={slotIndex:0,mode:'trigger',seqIndex:0,trigger:{left:null,right:null},flash:null};
-function startGetReady(){ phase='getready'; getReadyWall=performance.now(); if(saveData && !saveData.tutorialDone){ saveData.tutorialDone=true; writeSaveData(saveData); } }
+function startGetReady(){ stopAmbient(); phase='getready'; getReadyWall=performance.now(); if(saveData && !saveData.tutorialDone){ saveData.tutorialDone=true; writeSaveData(saveData); } }
 function startSkillTutorial(){
   phase='skilltutorial';
   skillTut={slotIndex:0,mode:'trigger',seqIndex:0,trigger:{left:null,right:null},flash:null};
 }
 function resetSkills(){
   skillState={nextEvent:0,available:{},active:null,trigger:{left:null,right:null},flash:null,goldWash:0};
+  resetAutoState();
 }
+/* ============================================================
+   伙伴自动技能 — 战斗内运行时。纯条件监听器 + 冷却;提示走伙伴青色、
+   小字+轻音,不抢对波注意力(设计案 §3.3)。
+   ============================================================ */
+const FRAG_COL='#7fe0ff';                     // 伙伴(碎片)主题色
+let autoState=null;
+function resetAutoState(){ autoState={cdUntil:0,activeUntil:0,charges:0,perfCount:0,lastMissAt:0,hitsSinceMiss:0,ocOn:false,lastComboTier:0,guardUsed:false}; }
+function autoDef(){ if(!autoState) return null; const id=equippedAuto||(trainingMode?'strike':null); return id?AUTO_SKILLS[id]:null; }   // 独立于 noSkills:BOSS 掉落后立刻可用(序章没解锁自然为空);训练默认带「余震」
+function autoName(d){ return cfg.lang==='en'?d.name_en:d.name; }
+function autoAnnounce(txt, now){
+  pops.push({x:HITX()+170, y:cv.height*0.36, txt:(cfg.lang==='en'?'FRAGMENT · ':'碎片 · ')+txt, col:FRAG_COL, t:now});
+  burst(HITX()-cv.width*0.05, cv.height*0.5, FRAG_COL, 14);
+  if(actx){ const t=actx.currentTime+0.01;    // soft partner chime
+    scheduleTone(t,987.77,0.16,0.05,'sine',0.2,7000); scheduleTone(t+0.09,1318.5,0.22,0.04,'sine',0.24,8000); }
+}
+function autoShieldOn(now){ const d=autoDef(); return !!(d && d.id==='aegis' && now<autoState.activeUntil); }
+function autoHealOn(now){ const d=autoDef(); return !!(d && d.id==='sync' && now<autoState.activeUntil); }
+function autoOverclockOn(now){ const d=autoDef(); return !!(d && d.id==='overclock' && autoState.ocOn); }
+function autoConsumeGuard(now){               // 底线:每战一次,把致死伤害挡在 1 HP
+  const d=autoDef(); if(!d || d.id!=='guard' || autoState.guardUsed) return false;
+  autoState.guardUsed=true; autoState.activeUntil=now+1400;
+  autoAnnounce(cfg.lang==='en'?'LASTLINE — held at 1 HP':'底线守住 — 1 HP', now);
+  burst(HITX()-cv.width*0.05, cv.height*0.5, FRAG_COL, 30);
+  shake=Math.min(shake+18,30);
+  return true;
+}
+function autoConsumeReframe(now){             // 补帧:有充能时吃掉一次 Miss 的断连
+  const d=autoDef(); if(!d || d.id!=='buffer' || autoState.charges<1) return false;
+  autoState.charges--; autoAnnounce(cfg.lang==='en'?'reframed — combo holds':'补帧成功，连击不断', now);
+  return true;
+}
+function onAutoHit(perfect, now){             // 每次命中后调用(combo 已 +1)
+  const d=autoDef(); if(!d) return;
+  autoState.hitsSinceMiss++;
+  if(d.id==='strike'){                        // 余震:连击每满一档(10/20/30…各触发一次) → 碎片补一击
+    const tier=Math.floor(combo/d.comboEvery);
+    if(tier>autoState.lastComboTier){         // 只在升到新档位时触发;断连归零后重新爬回还会再触发
+      autoState.lastComboTier=tier;
+      autoState.activeUntil=now+900;          // 徽章亮一下
+      const dmg=Math.max(1,Math.round(levelMaxHP*d.dmgFrac));   // 按敌方总血百分比 → 各章节等值
+      enemyHP-=dmg;                           // 击杀判定由调用方(registerPunch)统一处理
+      burst(SPAWNX()+cv.width*0.03, cv.height*0.5, FRAG_COL, 20);
+      pops.push({x:SPAWNX()-80,y:cv.height*0.40,txt:autoName(d)+' -'+dmg,col:FRAG_COL,t:now});
+      shake=Math.min(shake+8,18);
+      if(actx){ const t=actx.currentTime+0.01;   // 短促的双音"补刀"声,不抢戏
+        scheduleTone(t,523.25,0.09,0.05,'square',0.15,3200); scheduleTone(t+0.05,392,0.12,0.055,'square',0.1,2400); }
+    }
+  } else if(d.id==='sync'){                   // 回写:连击每过一档 → 一段持续回血(带冷却)
+    const tier=Math.floor(combo/d.comboEvery);
+    if(tier>autoState.lastComboTier){
+      autoState.lastComboTier=tier;
+      if(now>=autoState.cdUntil){
+        autoState.activeUntil=now+d.durMs; autoState.cdUntil=now+d.cdMs;
+        autoAnnounce(cfg.lang==='en'?'writeback — regen':'记忆回写，持续回血', now);
+      }
+    }
+  } else if(d.id==='buffer' && perfect){      // 补帧:完美命中蓄能
+    autoState.perfCount++;
+    if(autoState.perfCount>=d.perfEvery && autoState.charges<d.maxCharges){
+      autoState.perfCount=0; autoState.charges++;
+      autoAnnounce(cfg.lang==='en'?'reframe ready':'补帧就绪', now);
+    }
+  }
+}
+function onAutoMiss(now){                     // 真正断连的 Miss(补帧兜住的不走这里)
+  if(!autoState) return;
+  autoState.lastComboTier=0; autoState.lastMissAt=now; autoState.hitsSinceMiss=0;
+  autoState.ocOn=false;
+}
+function updateAutoSkills(now, dt){
+  const d=autoDef(); if(!d) return;
+  if(d.id==='sync' && now<autoState.activeUntil)
+    playerHP=Math.min(MAX_PLAYER_HP, playerHP+d.healPerSec*dt/1000);
+  if(d.id==='aegis' && now>=autoState.cdUntil && now>=autoState.activeUntil && playerHP>0 && playerHP<MAX_PLAYER_HP*d.hpFrac){
+    autoState.activeUntil=now+d.durMs; autoState.cdUntil=now+d.durMs+d.cdMs;
+    autoAnnounce(cfg.lang==='en'?'failsafe — damage halved':'熔断启动，伤害减半', now);
+  }
+  if(d.id==='overclock'){
+    const on = autoState.hitsSinceMiss>=d.minHits && (now-autoState.lastMissAt)>=d.armMs;
+    if(on && !autoState.ocOn){ autoState.ocOn=true; autoAnnounce((cfg.lang==='en'?'overclock ×':'超频运转 ×')+d.scoreMul, now); }
+    if(!on) autoState.ocOn=false;
+  }
+}
+let _fbSkillCache=null, _fbSkillKey='';
 function skillEvents(){
-  return (midiSong && midiSong.triggerEvents && midiSong.triggerEvents.length) ? midiSong.triggerEvents : FALLBACK_SKILL_EVENTS;
+  if(midiSong && midiSong.triggerEvents && midiSong.triggerEvents.length) return midiSong.triggerEvents;
+  // 没有技能轨的曲子(第一/二章战斗)→ 按当前曲速/时长生成若干"就绪点"(交替 A/B),让装备的技能真的有机会发动
+  const beat=60000/(cfg.bpm||BATTLE_BPM);
+  const durMs=(midiSong && midiSong.durationSec ? midiSong.durationSec : 40)*1000;
+  const key=Math.round(beat)+'/'+Math.round(durMs);
+  if(_fbSkillKey===key && _fbSkillCache) return _fbSkillCache;
+  const evs=[]; let t=beat*16, i=0;
+  while(t < durMs-beat*4 && evs.length<8){ evs.push({slot:i%2===0?'A':'B', timeMs:t, label:'AUTO_'+i}); t+=beat*24; i++; }
+  if(!evs.length) evs.push({slot:'A', timeMs:beat*8, label:'AUTO_0'});
+  _fbSkillKey=key; _fbSkillCache=evs;
+  return evs;
 }
+const SKILL_AVAIL_MS=14000;             // 技能就绪后保持可发动的时长(过期作废)
 function makeSkillAvailable(slot, now, ev){
   const def=skillDefForSlot(slot);
+  if(!def) return;                                        // 空槽不就绪
+  if(skillState.active || skillState.available[slot]) return;
+  skillState.available[slot]={def, since:now, expires:now+SKILL_AVAIL_MS};
   skillState.goldWash=Math.max(skillState.goldWash,0.42);
-  pops.push({x:cv.width*0.50,y:cv.height*0.20,txt:def.short+' LINK',col:'--gold',t:now});
-  startSkillFromSlot(slot, now, ev);
+  const nm=cfg.lang==='en'?def.name_en:def.name;
+  pops.push({x:cv.width*0.50,y:cv.height*0.18,txt:nm+(cfg.lang==='en'?' READY · ':' 就绪 · ')+triggerLabel(def),col:'--gold',t:now});
 }
 function updateSkills(now, dt){
   const events=skillEvents();
@@ -943,7 +1237,8 @@ function clearBallsForSkill(now){
 }
 function startSkillFromSlot(slot, now, ev=null){
   if(skillState.active) return false;
-  const def=skillDefForSlot(slot);
+  const def=(skillState.available[slot] && skillState.available[slot].def) || skillDefForSlot(slot);
+  if(!def) return false;
   delete skillState.available[slot];
   clearBallsForSkill(now);
   skillState.active={slot,skill:def,index:0,startT:now,endT:now+def.windowMs,lockHP:playerHP};
@@ -966,11 +1261,15 @@ function resolveSkill(ok, now){
       shake=Math.min(shake+20,28);
       burst(SPAWNX()+cv.width*0.04,cv.height*0.50,'--gold',44);
       pops.push({x:SPAWNX()-90,y:cv.height*0.40,txt:'-'+def.effect.value+' HP',col:'--gold',t:now});
-      if(enemyHP<=0){ enemyHP=0; endGame(true); }
+      if(enemyHP<=0){ enemyHP=0; onEnemyDown(now); }
     }else if(def.effect.type==='heal'){
       playerHP=Math.min(MAX_PLAYER_HP,playerHP+def.effect.value);
       burst(HITX()-cv.width*0.05,cv.height*0.50,'--green',38);
       pops.push({x:HITX()+90,y:cv.height*0.40,txt:'+'+def.effect.value+' HP',col:'--green',t:now});
+    }else if(def.effect.type==='lock'){                      // 不熄:血线锁定一段时间
+      hpLockUntil=now+def.effect.value;
+      burst(HITX()-cv.width*0.05,cv.height*0.50,'--gold',34);
+      pops.push({x:HITX()+90,y:cv.height*0.40,txt:(cfg.lang==='en'?'HP LOCKED ':'血线锁定 ')+((def.effect.value/1000)|0)+'s',col:'--gold',t:now});
     }
     pops.push({x:cv.width/2,y:cv.height*0.24,txt:'技能成功',col:'--gold',t:now});
   }else{
@@ -1002,13 +1301,13 @@ function trySkillGesture(hand,lane,now){
   for(const slot of ['A','B']){
     const avail=skillState.available[slot];
     if(!avail) continue;
-    const def=skillDefForSlot(slot);
-    if(def.triggerLane===lane) return startSkillFromSlot(slot, now);
+    const def=avail.def || skillDefForSlot(slot);
+    if(def && def.triggerLane===lane) return startSkillFromSlot(slot, now);
   }
   return false;
 }
 function handleSkillTutorialPunch(hand,lane,now){
-  const slot=['A','B'][skillTut.slotIndex], def=skillDefForSlot(slot);
+  const slot=['A','B'][skillTut.slotIndex], def=skillDefForSlot(slot)||SKILLS[SKILL_ORDER[skillTut.slotIndex]];
   const col=hand==='left'?'--blue':'--red', y=laneY(lane);
   beams.push({y,col,t:now,hand,lane,reach:SPAWNX()});
   burst(HITX(),y,col,16);
@@ -1041,20 +1340,140 @@ function handleSkillTutorialPunch(hand,lane,now){
     skillTut.flash={ok:false,t:now,txt:'现在要 '+moveLabel(expected)};
   }
 }
+/* ============================================================
+   节拍校准向导 — 「和音乐卡不上」的最终解药:
+   节拍器响,玩家跟着任意出拳;取触发时刻对拍点的中位偏差,
+   反号写进 cfg.calibration(判定时 punch+calibration 对齐节拍)。
+   ============================================================ */
+let calib=null, calibReturn='menu';
+const CALIB_NEED=10;
+function startCalib(){
+  if(!actx || !started) return;
+  stopAudioPlayback();
+  calibReturn = (isMenuPhase()||phase==='practice') ? phase : 'menu';
+  phase='calib';
+  const beat=60000/(cfg.bpm||120);
+  calib={ start:gameNow()+1200, beat, nextClick:0, offs:[], oldCal:cfg.calibration, result:null, resultAt:0 };
+}
+function cancelCalib(){ calib=null; phase=calibReturn||'menu'; }
+function scheduleCalibClicks(){
+  if(phase!=='calib'||!calib||!actx) return;
+  const ahead=gameNow()+260;
+  while(calib.start+calib.nextClick*calib.beat < ahead){
+    const tAudio=(calib.start+calib.nextClick*calib.beat+t0)/1000;
+    if(tAudio>actx.currentTime){
+      const strong=calib.nextClick%4===0;
+      beep(tAudio, strong?880:660, 0.06, strong?0.3:0.18);
+    }
+    calib.nextClick++;
+  }
+  if(calib.result!=null && gameNow()>calib.resultAt+2600){ const back=calibReturn; calib=null; phase=back||'menu'; }
+}
+function calibPunch(hand,lane,now,hitT){
+  if(!calib||calib.result!=null) return;
+  const col=hand==='left'?'--blue':'--red';
+  beams.push({y:laneY(lane),col,t:now,hand,lane,reach:HITX()+(SPAWNX()-HITX())*0.4});
+  burst(HITX(),laneY(lane),col,12);
+  if(hitT<calib.start+3.5*calib.beat) return;             // 前 4 拍只听不记
+  const n=Math.round((hitT-calib.start)/calib.beat);
+  const off=hitT-(calib.start+n*calib.beat);              // 原始触发偏差(不含校准)
+  if(Math.abs(off)>calib.beat*0.45) return;               // 离拍太远的丢弃
+  calib.offs.push(off);
+  pops.push({x:cv.width/2,y:cv.height*0.64,txt:(off>0?'+':'')+off.toFixed(0)+'ms',col:Math.abs(off)<60?'--green':'--gold',t:now});
+  if(calib.offs.length>=CALIB_NEED) finishCalib();
+}
+function finishCalib(){
+  const s=[...calib.offs].sort((a,b)=>a-b);
+  const med=s[(s.length/2)|0];
+  cfg.calibration=Math.max(-350,Math.min(150,Math.round(-med/5)*5));
+  persistSettings(); syncUI();
+  calib.result=med; calib.resultAt=gameNow();
+  playSkillStepSfx(4);
+}
+function drawCalib(now){
+  const W=cv.width,H=cv.height;
+  ctx.textAlign='center';
+  ctx.fillStyle='#eaf0ff';ctx.font='bold 30px Segoe UI';
+  ctx.fillText(cfg.lang==='en'?'Beat Calibration':'节拍校准',W/2,H*0.15);
+  ctx.fillStyle='#9fb0e8';ctx.font='16px Segoe UI';
+  ctx.fillText(cfg.lang==='en'?('Punch (any lane) exactly ON each click · '+CALIB_NEED+' punches'):('跟着「嗒」声出拳(任意拳打满 '+CALIB_NEED+' 拳)——测出你的设备延迟'),W/2,H*0.15+30);
+  if(!calib) return;
+  const ph=(((now-calib.start)%calib.beat)+calib.beat)%calib.beat/calib.beat;   // 0 = 拍点
+  const pulse=Math.max(0,1-ph*2.2);
+  ctx.save();ctx.globalCompositeOperation='lighter';
+  ctx.strokeStyle='rgba(255,210,58,'+(0.35+0.6*pulse)+')';ctx.lineWidth=3+9*pulse;
+  ctx.beginPath();ctx.arc(W/2,H*0.45,60+26*pulse,0,7);ctx.stroke();
+  ctx.fillStyle='rgba(255,210,58,'+(0.10+0.30*pulse)+')';
+  ctx.beginPath();ctx.arc(W/2,H*0.45,54,0,7);ctx.fill();ctx.restore();
+  ctx.fillStyle='#ffd23a';ctx.font='bold 26px Segoe UI';
+  ctx.fillText(calib.offs.length+' / '+CALIB_NEED,W/2,H*0.45+9);
+  if(calib.result!=null){
+    ctx.fillStyle=cssCol('--green');ctx.font='bold 24px Segoe UI';
+    ctx.fillText((cfg.lang==='en'?'Done! median offset ':'完成！中位延迟 ')+calib.result.toFixed(0)+'ms → '+(cfg.lang==='en'?'calibration ':'校准已设为 ')+cfg.calibration+'ms',W/2,H*0.72);
+  }else{
+    ctx.fillStyle='#8a93b8';ctx.font='13px Segoe UI';
+    ctx.fillText(cfg.lang==='en'?'Esc / click = cancel':'Esc / 点击 = 取消',W/2,H*0.92);
+  }
+}
 function enterGame(){
+  stopAmbient();                                                      // 对话 BGM 停,战斗 BGM 接管
   phase='game';
   paused=false; pauseMenuOpen=false; gmenu=null; crossStart=0;        // clear any pause state
   if(actx && actx.state==='suspended') actx.resume();                 // ensure clock runs
   hintUntil = battleHint ? performance.now()+6500 : 0;                // show the start-of-battle hint a few sec
   balls=[];particles=[];beams=[];pops=[];
   score=0;combo=0;maxCombo=0;enemyHP=levelMaxHP;playerHP=MAX_PLAYER_HP;
-  nextStep=0;nextClickBeat=0;gameOver=false;win=false;stats={perfect:0,good:0,miss:0};  // reset beat cursor too (else metronome drifts away each replay)
+  hpLockUntil=0; battleWave=1; waveBannerTxt=''; waveBreakUntil=0;    // 车轮战/不熄/爆破中断全部复位
+  abortArmed=false; abortDeadline=0; aborting=false; abortUntil=0;
+  nextStep=0;nextClickBeat=0;gameOver=false;win=false;stats={perfect:0,good:0,miss:0,clear:0};  // reset beat cursor too (else metronome drifts away each replay)
+  buildAttackChart();                                                                   // derive enemy attacks from THIS song's drums
   resetSkills();
   if(actx) t0=actx.currentTime*1000+300;
   stopAudioPlayback();
   if(usingSong) startSong(); else startMidiSong();
   hands.left=newHand(); hands.right=newHand();   // MUST reset: clock just jumped, stale lastFire/hist would swallow every punch
   pops.push({x:cv.width/2, y:cv.height/2, txt:'开始！', col:'--gold', t:gameNow()});
+}
+/* ---- 多阶段车轮战 + 爆破中断(c3_1;终局「撑住计时」可复用) ---- */
+function onEnemyDown(now){
+  if(aborting) return;
+  const lv=(!trainingMode && LEVELS[currentLevel])||null;
+  const waves=(lv && lv.phases)||1;
+  if(abortArmed){ startAbort(now); return; }                 // 加时波被打空 → 直接触发爆破
+  if(lv && (battleWave<waves || (lv.abortWave && battleWave===waves))){
+    battleWave++;
+    enemyHP=levelMaxHP;
+    waveBreakUntil=now+1800;
+    waveBannerTxt = (battleWave%2===0)
+      ? (cfg.lang==='en'?'“TARGET NOT DESTROYED. MISSION CONTINUES.”':'「目标未销毁。任务继续。」')
+      : (cfg.lang==='en'?'— NOT OVER YET —':'——还没结束');
+    burst(SPAWNX()+cv.width*0.04, cv.height*0.5, '--red', 40);
+    shake=Math.min(shake+16,26);
+    if(lv.abortWave && battleWave===waves+1){ abortArmed=true; abortDeadline=now+(lv.abortAfterMs||11000); }
+    if(actx){ const t=actx.currentTime+0.02;                 // 换波:低吼两声
+      scheduleTone(t,98,0.5,0.20,'sawtooth',-0.1,900); scheduleTone(t+0.12,196,0.4,0.12,'square',0.1,1400); }
+    return;
+  }
+  endGame(true);
+}
+function startAbort(now){
+  if(aborting) return;
+  aborting=true; abortArmed=false;
+  abortUntil=performance.now()+2800;
+  for(const b of balls){ if(!b.hit) burst(ballX(b,now),laneY(b.lane),'--red',12); }
+  balls=[];
+  shake=34;
+  if(actx){ const t=actx.currentTime+0.02;                   // 警报:三段下坠 + 低频轰
+    [880,640,460].forEach((f,i)=>scheduleTone(t+i*0.45,f,0.4,0.16,'sawtooth',0,2200));
+    scheduleNoise(t,2.4,0.24,0,'lowpass',260);
+  }
+}
+function finishAbort(){
+  aborting=false; abortDeadline=0; gameOver=false;
+  stopAudioPlayback();
+  if(!trainingMode){ markCleared(saveData,currentLevel,score); writeSaveData(saveData); }   // 中断=剧情推进(非胜非败)
+  const lv=LEVELS[currentLevel];
+  if(!trainingMode && lv && lv.post) playScene(lv.post); else phase='menu';
 }
 function endGame(won){
   gameOver=true; win=won; phase='gameover'; usingMidi=false;
@@ -1085,7 +1504,14 @@ function menuPunch(hand, lane, now){
 function doMenu(act){
   if(phase==='getset'){ if(act==='mid') confirmReady(); return; }               // 平拳 = 确认站好,开始
   if(phase==='menu_state'){ if(act==='up') stateNav('up'); else if(act==='down') stateNav('down'); else if(act==='mid') stateNav('confirm'); return; }   // 上下移动 · 平拳交叉确认
-  if(phase==='cutscene'){ if(act==='down'||act==='mid') advanceScene(); else if(act==='up') sceneBack(); return; }  // 下/平拳交叉=下一句 上=上一句
+  if(phase==='cutscene'){
+    if(act==='mid'){                                        // 平拳交叉:学会自检后 = 对话中随时打开技能菜单;学会前 = 翻页(教学场景末行正好顺势打开)
+      if(selfCheckTaught() && scene) openStateMenu(()=>{ phase='cutscene'; });
+      else advanceScene();
+      return;
+    }
+    if(act==='down') advanceScene(); else if(act==='up') sceneBack(); return;   // 下=下一句 上=上一句
+  }
   if(phase==='training'){ if(act==='up') gnavUp(); else if(act==='down') gnavDown(); else if(act==='mid') gnavConfirm(); return; }  // 训练选曲手势
   if(phase==='intro'){
     if(act==='up'){ phase='tutorial'; tutStep=0; tutReps=0; tutFlash=null; tutHoldUntil=0; }   // 双拳上击 = 进入教学
@@ -1109,26 +1535,69 @@ function resetGame(){
   balls=[];particles=[];beams=[];pops=[];
   score=0;combo=0;maxCombo=0;enemyHP=MAX_ENEMY_HP;playerHP=MAX_PLAYER_HP;shake=0;
   nextStep=0;gameOver=false;win=false;
-  stats={perfect:0,good:0,miss:0};
+  stats={perfect:0,good:0,miss:0,clear:0};
   nextClickBeat=0;
   resetSkills();
   hands.left=newHand(); hands.right=newHand();   // fully reset detection/history
 }
 
+// Build the enemy-attack timeline FROM THE SONG so attacks land on real notes (not a metronome).
+// Source = drum hits (GM ch.9, or a track named drum/perc/impact); else riff/bass; else the fixed CHART.
+// Thinned by cfg.attackGap (gapMul) so density stays tunable. Lane from pitch (kick→下/snare→上), hands alternate.
+function buildAttackChart(){
+  atkChart=[]; atkIndex=0; atkLoop=0;
+  const evs=(midiSong && midiSong.events) || [];
+  let src=evs.filter(e=>!e.slot && (e.channel===9 || /drum|perc|impact|kick|snare/i.test(e.track||'')));
+  if(!src.length) src=evs.filter(e=>!e.slot && (e.channel===0 || e.channel===1));   // fallback: riff / bass
+  const minGap=Math.max(150, cfg.attackGap||500);
+  const LANES3=['low','mid','high'];
+  const beatMs=60000/(cfg.bpm||BATTLE_BPM), grid=beatMs/2;   // 8 分音符网格
+  // ★重音优先选点:给每个鼓点打分(底鼓/军鼓 > 镲/桶鼓 > 踩镲;力度加权;正拍加分),
+  //   高分重音允许更密(0.75×间距)、弱拍更疏(1.5×) → 攻击时刻贴着音乐的重音骨架起伏,
+  //   而不是按先来后到抓最近的鼓点。理想出拳时刻 = 球心过判定区中心 = 这些重音本身。
+  const drumW=p=> (p===36||p===35)?3.0 : (p===38||p===40||p===37)?2.6 : (p===49||p===51||p===57)?2.2
+                : (p===45||p===41||p===43||p===47||p===48||p===50)?1.8 : (p===46)?1.2 : 1.0;
+  const cands=new Map();                        // 网格时刻 → 该时刻最高的重音分
+  for(const e of src){
+    const tMs=Math.round((e.timeSec*1000)/grid)*grid;
+    const frac=(((tMs%beatMs)+beatMs)%beatMs)/beatMs;               // 0=正拍  0.5=八分反拍
+    const onBeat=frac<0.01?0.8:0.25;
+    const w=(e.channel===9?drumW(e.pitch):1.6)*(e.velocity/127)+onBeat;
+    if(!cands.has(tMs) || cands.get(tMs)<w) cands.set(tMs,w);
+  }
+  const STRONG=2.4, strongGap=Math.max(230,minGap*0.75), weakGap=minGap*1.5;
+  const byW=[...cands.entries()].map(([tMs,w])=>({tMs,w,need:w>=STRONG?strongGap:weakGap}))
+    .sort((a,b)=>b.w-a.w || a.tMs-b.tMs);
+  const picked=[];
+  for(const c of byW){                          // 高分先占位;与已选点的间距按二者较大的 need 判定
+    let clash=false;
+    for(const p of picked){ if(Math.abs(p.tMs-c.tMs)<Math.max(c.need,p.need)){ clash=true; break; } }
+    if(!clash) picked.push(c);
+  }
+  picked.sort((a,b)=>a.tMs-b.tMs);
+  let pLane=null, pHand=null, laneRun=0, handRun=0;
+  for(const c of picked){
+    // 轨道(上/中/下)与手(左蓝/右红)各自均匀随机、互不绑定,最多连两次同项 → 上下拳红蓝都均衡
+    let lane; do{ lane=LANES3[(Math.random()*3)|0]; } while(lane===pLane && laneRun>=2);
+    laneRun = lane===pLane ? laneRun+1 : 1; pLane=lane;
+    let h;    do{ h=Math.random()<0.5?'left':'right'; } while(h===pHand && handRun>=2);
+    handRun = h===pHand ? handRun+1 : 1; pHand=h;
+    atkChart.push({tMs:c.tMs, lane, hand:h});
+  }
+  if(!atkChart.length){ const beat=cfg.attackGap||500; for(let i=0;i<32;i++){ const s=CHART[i%CHART.length]; if(s) atkChart.push({tMs:i*beat, lane:s.lane, hand:s.hand}); } }
+}
 function spawnDue(now, muted=false){
-  if (gameOver) return;
-  const beat = cfg.attackGap;   // attack slot spacing (1.5 beats → locked to the music grid)
-  const leadIn = 60000/cfg.bpm*4; // count-in = 4 beats, so notes align to the BGM downbeat grid
-  // spawn any steps whose tHit-approach has arrived
+  if (gameOver || !atkChart.length) return;
+  const leadIn = 60000/cfg.bpm*4;                                  // ~4-beat count-in: no attacks in the first bars
+  const durMs = (midiSong && midiSong.durationSec ? midiSong.durationSec : 30)*1000;
   while (true){
-    const tHit = leadIn + nextStep*beat;
+    const a=atkChart[atkIndex];
+    const tHit = a.tMs + atkLoop*durMs;                            // drum's game-clock time (midiStartedAtSec=t0/1000 ⇒ gameMs == songMs)
     if (now < tHit - cfg.approach) break;
-    const step = CHART[nextStep % CHART.length];
-    if (step && !muted){
-      balls.push({ hand:step.hand, lane:step.lane, tHit, hit:false, missed:false });
-    }
-    nextStep++;
-    if (nextStep > 100000) break; // safety
+    if (tHit >= leadIn && !muted) balls.push({ hand:a.hand, lane:a.lane, tHit, hit:false, missed:false });
+    atkIndex++;
+    if (atkIndex>=atkChart.length){ atkIndex=0; atkLoop++; }
+    if (atkLoop>100000) break;
   }
 }
 
@@ -1136,14 +1605,16 @@ function laneY(lane){
   const top=cv.height*0.30, mid=cv.height*0.50, bot=cv.height*0.70;
   return lane==='high'?top:lane==='low'?bot:mid;
 }
-const HITX = ()=>cv.height*0.28;     // hit line x (player side, left)
+const HITX = ()=>cv.height*0.28;     // player line x (left) — 漏掉的攻击最终砸到这里才掉血
 const SPAWNX = ()=>cv.width*0.92;    // enemy side (right)
-function ballX(b, now){ const prog=(now-(b.tHit-cfg.approach))/cfg.approach; return SPAWNX()+(HITX()-SPAWNX())*prog; }
+const JUDGEX = ()=>cv.width*0.50;    // ★判定区中心(屏幕中央):球心到这里 = 音乐节拍点 = 理想出拳时刻
+function ballX(b, now){ const prog=(now-(b.tHit-cfg.approach))/cfg.approach; return SPAWNX()+(JUDGEX()-SPAWNX())*prog; }   // prog>1 → 越过判定区继续飞向玩家
 
 function registerPunch(hand, lane, now, hitT){
   const col = hand==='left'?'--blue':'--red';
   const y = laneY(lane);
   shake=Math.min(shake+6,16);
+  if (phase==='calib'){ calibPunch(hand, lane, now, hitT); return; }   // 校准向导:记录出拳偏差
   if (phase==='intro' || phase==='gameover' || phase==='cutscene' || phase==='getset' || phase==='training' || phase==='menu_state'){ menuPunch(hand, lane, now); return; }  // gesture-driven screens
   if (phase==='getready'||isMenuPhase()) return;   // other menu screens use mouse/keys, not punches
   if (phase==='practice'){
@@ -1180,29 +1651,48 @@ function registerPunch(hand, lane, now, hitT){
     return;
   }
   if (phase==='game' && !noSkills && trySkillGesture(hand,lane,now)) return;
-  // GAME: the column shoots out and is BLOCKED by the FRONTMOST still-approaching ball
-  // in this lane+hand; that ball explodes. Only the closest one counts.
-  let target=null, tx=Infinity;
-  for(const b of balls){
-    if(b.hit||b.missed || b.lane!==lane || b.hand!==hand) continue;
-    const bx=ballX(b,now);
-    if(bx < HITX()-20) continue;                 // already crossed the line -> not hittable
-    if(bx < tx){ tx=bx; target=b; }              // frontmost = smallest x (closest to hit line)
+  // GAME: ★时间窗判定(judgeHit)——用「出拳触发时刻 + 校准」对每个球的节拍点 tHit 找最近匹配。
+  // Perfect = |偏差|≤perfectWindow(球心在判定区金圈内),Good = ≤goodWindow;窗外出拳 = 落空(乱打不再有分)。
+  const j = judgeHit(hitT, hand, lane, balls, cfg);
+  let target = j.ball, clearHit=false;
+  if(!target){
+    // 窗外「拦截」:任何还没砸到玩家的球都能打掉(保底分、不涨也不断连击)——
+    // 场上不留残球,前面漏一个不会挡住后面踩拍。光柱打最靠近玩家的那颗。
+    let bx=Infinity;
+    for(const b of balls){
+      if(b.hit||b.impacted||b.hand!==hand||b.lane!==lane) continue;
+      const x=ballX(b,now);
+      if(x<bx){ bx=x; target=b; }                // 最靠近玩家(x 最小) = 光柱先碰到的
+    }
+    clearHit=!!target;
   }
-  const reach = target ? tx : HITX()+(SPAWNX()-HITX())*0.33;   // whiff = short stub
+  const tx = target ? ballX(target,now) : 0;
+  const reach = target ? tx : JUDGEX()+(SPAWNX()-JUDGEX())*0.20;   // whiff = short stub
   beams.push({ y, col, t:now, hand, lane, reach });
+  if(clearHit){
+    target.hit=true; target.hitAt=now;
+    burst(tx, y, col, 12);
+    score+=40; enemyHP-=1; stats.clear=(stats.clear||0)+1;
+    shake=Math.min(shake+4,16);
+    pops.push({x:tx, y:y-30, txt:(cfg.lang==='en'?'CLEAR +40':'拦截 +40'), col:'--dim', t:now});
+    if(enemyHP<=0){ enemyHP=0; onEnemyDown(now); }
+    return;
+  }
   if(target){
     target.hit=true; target.hitAt=now;
     burst(tx, y, col, 24);
-    const closeness=1-Math.max(0,Math.min(1,(tx-HITX())/(SPAWNX()-HITX())));  // 1=on the line
-    const perfect=closeness>0.78;
-    score += perfect?300:160; enemyHP -= perfect?3:2;
+    const perfect = j.result==='perfect';
+    const oc = autoOverclockOn(now);                               // 超频:得分/伤害增幅
+    score += Math.round((perfect?300:160)*(oc?AUTO_SKILLS.overclock.scoreMul:1));
+    enemyHP -= (perfect?3:2)+(oc?AUTO_SKILLS.overclock.dmgBonus:0);
     if(perfect) stats.perfect++; else stats.good++;
-    pops.push({x:tx, y:y-30, txt:perfect?'PERFECT':'HIT', col:perfect?'--gold':'--green', t:now});
+    const offTxt = perfect ? '' : (j.delta>0 ? (cfg.lang==='en'?' · LATE':' · 晚了') : (cfg.lang==='en'?' · EARLY':' · 早了'));
+    pops.push({x:tx, y:y-30, txt:(perfect?'PERFECT':'HIT')+offTxt, col:perfect?'--gold':'--green', t:now});
     combo++; maxCombo=Math.max(maxCombo,combo);
+    onAutoHit(perfect, now);                                       // 伙伴自动技能:余震/回写/补帧/超频计数
     shake=Math.min(shake+9,16);
-    if(enemyHP<=0){ enemyHP=0; endGame(true); }
-  } else { combo=0; }                            // nothing in lane to hit = whiff
+    if(enemyHP<=0){ enemyHP=0; onEnemyDown(now); }
+  } else { combo=0; if(autoState) autoState.lastComboTier=0; }     // 附近连可拦截的球都没有 = 真落空,断连
 }
 
 function burst(x,y,colVar,n){
@@ -1304,6 +1794,7 @@ function processHand(side, w, sho, body, now){
     }
   }
   let fired=updatePunch(h.punch, h.act, cfg);
+  if(h.vis<0.5){ fired=false; if(h.pending && h.vis<0.35) h.pending=null; }   // 手腕看不清(遮挡/出画)→ 不触发,防「鬼拳」
   if(fired){ if(now-h.lastFire<cfg.minGap) fired=false; else h.lastFire=now; }
   if(fired && !paused && !h.pending){            // detect swings in every phase (incl. gameover, for the replay gesture)
     let s=h.hist[0];                                              // START = filtered pos ~trajWindow ago
@@ -1324,20 +1815,45 @@ function update(now, dt){
     // skip game logic this frame — `now` is still the stale pre-reset timestamp
   } else if (phase==='game'){
     if(!noSkills) updateSkills(now,dt);
-    const attacksMuted=!!skillState.active;
+    updateAutoSkills(now,dt);                   // 伙伴自动技能独立于 noSkills:拿到模块的战斗就生效
+    if(abortArmed && !aborting && (now>=abortDeadline || enemyHP<=levelMaxHP*0.55)) startAbort(now);   // 爆破中断:加时波打一阵后触发
+    if(aborting && performance.now()>=abortUntil){ finishAbort(); return; }
+    const attacksMuted=!!skillState.active || now<waveBreakUntil || aborting;   // 换波横幅/爆破期间停手
     spawnDue(now, attacksMuted);
     if(!attacksMuted){
-      for(const b of balls){                        // a ball reaching the hit line unhit = MISS
-        if(!b.hit && !b.missed && ballX(b,now) <= HITX()){
-          b.missed=true; combo=0; stats.miss++;
-          playerHP-=6; shake=Math.min(shake+6,16);
-          pops.push({x:HITX(),y:laneY(b.lane),txt:'MISS',col:'--red',t:now});
-          if(playerHP<=0){playerHP=0;endGame(false);}
+      for(const b of balls){
+        // ① 节奏 MISS:球滑出 Good 时间窗(+260ms 宽限给还在收势的挥拳)→ 断连;球本体继续飞向玩家
+        if(!b.hit && !b.missed && now > b.tHit + cfg.goodWindow + 260){
+          b.missed=true; stats.miss++;
+          if(autoConsumeReframe(now)){                       // 补帧:消耗充能,连击不断
+            pops.push({x:JUDGEX(),y:laneY(b.lane),txt:(cfg.lang==='en'?'REFRAME':'补帧 · 连击保住'),col:FRAG_COL,t:now});
+          } else {
+            combo=0; onAutoMiss(now);
+            pops.push({x:JUDGEX(),y:laneY(b.lane),txt:'MISS',col:'--red',t:now});
+          }
+        }
+        // ② 漏掉的攻击真正砸到玩家(左侧白球)→ 掉血(不熄锁血 > 熔断减伤 > 底线保命)
+        if(b.missed && !b.impacted && ballX(b,now) <= HITX()){
+          b.impacted=true;
+          if(now<hpLockUntil){                               // 不熄:血线锁定,伤害无效
+            burst(HITX(), laneY(b.lane), '--gold', 14);
+            pops.push({x:HITX()+40,y:laneY(b.lane)-8,txt:(cfg.lang==='en'?'EMBER':'不熄'),col:'--gold',t:now});
+          } else {
+            const shielded=autoShieldOn(now);
+            const dmg = shielded ? Math.ceil(6*AUTO_SKILLS.aegis.dmgMul) : 6;
+            playerHP-=dmg; shake=Math.min(shake+6,16);
+            burst(HITX(), laneY(b.lane), shielded?FRAG_COL:'--red', 20);
+            pops.push({x:HITX()+40,y:laneY(b.lane)-8,txt:'-'+dmg+(shielded?(cfg.lang==='en'?' ◈':' ◈熔断'):''),col:shielded?FRAG_COL:'--red',t:now});
+            if(playerHP<=0){
+              if(autoConsumeGuard(now)) playerHP=1;          // 底线:每战一次挡在 1 HP
+              else { playerHP=0; endGame(false); }
+            }
+          }
         }
       }
     }
-    // hit balls vanish at once (explosion = particles); missed balls fly off then despawn
-    balls=balls.filter(b=> b.hit ? now<(b.hitAt||now)+140 : ballX(b,now) > HITX()-160 );
+    // hit balls vanish at once (explosion = particles); missed balls fly on until they strike the player
+    balls=balls.filter(b=> b.hit ? now<(b.hitAt||now)+140 : !b.impacted );
   }
   for(const p of particles){p.x+=p.vx;p.y+=p.vy;p.vy+=0.12;p.vx*=0.97;p.life-=dt/650;}
   particles=particles.filter(p=>p.life>0);
@@ -1351,7 +1867,7 @@ function update(now, dt){
 /* ============================================================
    RENDER
    ============================================================ */
-function cssCol(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+function cssCol(v){ if(v && v[0]!=='-') return v; return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }   // 直接传色值(如伙伴青色)也可用
 function glowCircle(x,y,r,col,blur){
   ctx.save();ctx.globalCompositeOperation='lighter';
   ctx.shadowColor=col;ctx.shadowBlur=blur;
@@ -1360,7 +1876,8 @@ function glowCircle(x,y,r,col,blur){
 }
 // enemy = a writhing, irregular tangle of wavy rings (violet — distinct from red/blue hands)
 function drawEnemy(cx,cy,now,hp){
-  const col='#a472ff', frantic=1+(1-(hp??100)/100)*1.4;   // more agitated as it loses HP
+  if(enemyStyle==='self'){ drawSelfEnemy(cx,cy,now,hp); return; }   // 自我探索:主角光球 + 彩色乱线
+  const col = enemyStyle==='boss' ? '#ff4d4d' : '#a472ff', frantic=1+(1-(hp??100)/100)*1.4;   // boss=红, 普通=紫;越残血越狂躁
   ctx.save();ctx.globalCompositeOperation='lighter';
   ctx.strokeStyle=col;ctx.shadowColor=col;ctx.shadowBlur=22;ctx.lineWidth=2.5;
   for(let ring=0;ring<3;ring++){
@@ -1378,13 +1895,57 @@ function drawEnemy(cx,cy,now,hp){
   ctx.beginPath();ctx.arc(cx,cy,5,0,7);ctx.fill();
   ctx.restore();
 }
+// 自我探索的"敌人" = 内心背景的规则色块聚拢在主角光球周围:缓慢变形呼吸,
+// 各自按相位周期性「破碎 → 碎片散逸 → 淡出 → 重新聚合」;残血时破碎更频繁、飞得更远。
+// (替代旧的彩色乱线——和 mind 背景同一套视觉语言。)
+function drawSelfEnemy(cx,cy,now,hp){
+  const frantic=1+(1-(hp??100)/100)*1.8;
+  const hues=['#7fe0ff','#ff6fb0','#b58cff','#9affc0','#ffd24d'];
+  ctx.save();
+  const N=9;
+  for(let i=0;i<N;i++){
+    const col=hues[i%hues.length];
+    const orb=now/(2600-i*140)+i*0.7;                       // 慢速公转(各块不同速)
+    const R=(42+((i*29)%26))*(1+0.06*Math.sin(now/700+i));
+    const bx=cx+Math.cos(orb)*R, by=cy+Math.sin(orb)*R*0.82;
+    const w=15+((i*17)%14), h=10+((i*11)%12);
+    const cyc=((now/(2100-frantic*520)+i*0.618)%1+1)%1;     // 各块自己的破碎周期
+    const rot=Math.sin(now/900+i)*0.5 + (cyc>0.72 ? (cyc-0.72)*5 : 0);
+    ctx.save();
+    ctx.translate(bx,by); ctx.rotate(rot);
+    if(cyc<0.72){                                            // 完整块:轻微变形呼吸
+      const sq=1+0.20*Math.sin(now/300+i*2);
+      ctx.globalAlpha=0.42*Math.min(1,cyc/0.08);             // 重新聚合时淡入
+      ctx.fillStyle=col; ctx.fillRect(-w/2*sq,-h/2/sq,w*sq,h/sq);
+      ctx.globalAlpha=0.85*Math.min(1,cyc/0.08);
+      ctx.strokeStyle=col; ctx.lineWidth=1.5;
+      ctx.strokeRect(-w/2*sq,-h/2/sq,w*sq,h/sq);
+    } else {                                                 // 破碎:裂成三片散逸淡出
+      const k=(cyc-0.72)/0.28, fade=1-k, fly=k*16*frantic;
+      ctx.globalAlpha=0.6*fade;
+      ctx.fillStyle=col;
+      ctx.fillRect(-w/2-fly,      -h/2-fly*0.6, w*0.45, h*0.5);
+      ctx.fillRect( w*0.10+fly,   -h/2+fly*0.3, w*0.40, h*0.45);
+      ctx.fillRect(-w*0.15,        h*0.10+fly*0.8, w*0.5, h*0.4);
+    }
+    ctx.restore();
+  }
+  // 主角的白色光球核心
+  ctx.globalAlpha=1;const g=ctx.createRadialGradient(cx,cy,2,cx,cy,18);
+  g.addColorStop(0,'#ffffff');g.addColorStop(0.6,'rgba(220,230,255,0.6)');g.addColorStop(1,'rgba(180,200,255,0)');
+  ctx.fillStyle=g;ctx.beginPath();ctx.arc(cx,cy,18,0,7);ctx.fill();
+  ctx.restore();
+}
 
 function render(now){
   const W=cv.width,H=cv.height;
+  const beatMs=60000/(cfg.bpm||120);
+  const beatPulse=(phase==='game') ? Math.max(0,1-(((now%beatMs)+beatMs)%beatMs)/(beatMs*0.55)) : 0;   // 1 在每拍命中、半拍内衰减 → 视觉踩拍,呼应敌人攻击
   let sx=0,sy=0; if(shake>1){sx=(Math.random()-.5)*shake;sy=(Math.random()-.5)*shake;}
   ctx.setTransform(1,0,0,1,sx,sy);
   // bg
   ctx.fillStyle='#06070f';ctx.fillRect(-20,-20,W+40,H+40);
+  if(enemyStyle==='self' && (phase==='game'||phase==='getready'||phase==='gameover')) drawMindBg(now,false);   // 自我探索:内心世界背景(战斗背景以后再统一调试)
   if(skillState.goldWash>0){
     ctx.save();ctx.globalCompositeOperation='lighter';
     ctx.fillStyle=`rgba(255,210,58,${0.14*skillState.goldWash})`;
@@ -1392,18 +1953,39 @@ function render(now){
     ctx.restore();
   }
   // lane tracks + hit line — hidden on menu / cutscene / ready-gate screens for a clean look
-  if(!isMenuPhase() && phase!=='cutscene' && phase!=='getset' && phase!=='getready'){   // 倒数5秒内也不画判定线
+  if(!isMenuPhase() && phase!=='cutscene' && phase!=='getset' && phase!=='getready' && phase!=='calib'){   // 倒数5秒内也不画判定线
+    if(beatPulse>0.01){ ctx.save();ctx.globalCompositeOperation='lighter';ctx.fillStyle='rgba(120,170,255,'+(0.05*beatPulse)+')';ctx.fillRect(-20,-20,W+40,H+40);ctx.restore(); }  // 全场每拍轻闪
     for(const lane of LANES){
       const y=laneY(lane);
-      ctx.strokeStyle='rgba(120,140,210,.12)';ctx.lineWidth=2;
+      ctx.strokeStyle='rgba(120,140,210,'+(.12+.18*beatPulse)+')';ctx.lineWidth=2;
       ctx.beginPath();ctx.moveTo(HITX(),y);ctx.lineTo(SPAWNX(),y);ctx.stroke();
     }
     ctx.save();ctx.globalCompositeOperation='lighter';
     const grd=ctx.createLinearGradient(HITX()-30,0,HITX()+30,0);
-    grd.addColorStop(0,'rgba(120,180,255,0)');grd.addColorStop(1,'rgba(120,180,255,.5)');
+    grd.addColorStop(0,'rgba(120,180,255,0)');grd.addColorStop(1,'rgba(120,180,255,'+(.5+.4*beatPulse)+')');
     ctx.fillStyle=grd;ctx.fillRect(HITX()-30,H*0.22,60,H*0.56);ctx.restore();
-    ctx.strokeStyle='rgba(160,200,255,.55)';ctx.lineWidth=3;
+    ctx.strokeStyle='rgba(160,200,255,'+(.55+.4*beatPulse)+')';ctx.lineWidth=3+2*beatPulse;
     ctx.beginPath();ctx.moveTo(HITX(),H*0.22);ctx.lineTo(HITX(),H*0.78);ctx.stroke();
+    // ★ 判定区(屏幕中央):金圈=Perfect 窗、蓝圈=Good 窗,随节拍呼吸——球心进金圈出拳就是 PERFECT
+    if(phase==='game'||phase==='gameover'){
+      const jx=JUDGEX(), pxms=(SPAWNX()-jx)/cfg.approach;             // 球速 px/ms
+      const hg=cfg.goodWindow*pxms, hp2=cfg.perfectWindow*pxms;       // 窗口的空间半宽
+      const zt=H*0.24, zb=H*0.76;
+      ctx.save();ctx.globalCompositeOperation='lighter';
+      const gg2=ctx.createLinearGradient(jx-hg,0,jx+hg,0);
+      gg2.addColorStop(0,'rgba(110,160,255,0)');gg2.addColorStop(0.5,'rgba(110,160,255,'+(0.10+0.06*beatPulse)+')');gg2.addColorStop(1,'rgba(110,160,255,0)');
+      ctx.fillStyle=gg2;ctx.fillRect(jx-hg,zt,hg*2,zb-zt);
+      const pg=ctx.createLinearGradient(jx-hp2,0,jx+hp2,0);
+      pg.addColorStop(0,'rgba(255,210,58,0)');pg.addColorStop(0.5,'rgba(255,210,58,'+(0.16+0.14*beatPulse)+')');pg.addColorStop(1,'rgba(255,210,58,0)');
+      ctx.fillStyle=pg;ctx.fillRect(jx-hp2,zt,hp2*2,zb-zt);
+      ctx.strokeStyle='rgba(255,210,58,'+(0.5+0.4*beatPulse)+')';ctx.lineWidth=2.5+2*beatPulse;
+      ctx.beginPath();ctx.moveTo(jx,zt);ctx.lineTo(jx,zb);ctx.stroke();
+      ctx.strokeStyle='rgba(255,210,58,0.30)';ctx.lineWidth=1;ctx.setLineDash([5,7]);
+      ctx.beginPath();ctx.moveTo(jx-hp2,zt);ctx.lineTo(jx-hp2,zb);ctx.moveTo(jx+hp2,zt);ctx.lineTo(jx+hp2,zb);ctx.stroke();ctx.setLineDash([]);
+      ctx.restore();
+      ctx.fillStyle='rgba(255,220,120,'+(0.45+0.3*beatPulse)+')';ctx.font='bold 12px Segoe UI';ctx.textAlign='center';
+      ctx.fillText(cfg.lang==='en'?'PERFECT ZONE':'判定区 · 球到金圈出拳',jx,zt-8);
+    }
   }
 
   if(phase==='practice' || phase==='skilltutorial') drawLaneBands(now);
@@ -1411,8 +1993,23 @@ function render(now){
   // enemy = irregular wavy tangle (right) · player = white orb (left)
   if(phase==='intro'||phase==='getready'||phase==='game'||phase==='gameover'){   // arena only in battle-ish phases
     drawEnemy(SPAWNX()+W*0.04, H*0.5, now, enemyHP/levelMaxHP*100);
-    glowCircle(HITX()-W*0.05, H*0.5, 26+Math.sin(now/400)*3, '#ffffff', 30);
+    glowCircle(HITX()-W*0.05, H*0.5, 26+Math.sin(now/400)*3+5*beatPulse, '#ffffff', 30+22*beatPulse);
     glowCircle(HITX()-W*0.05, H*0.5, 10, '#ffffff', 14);
+    if(phase==='game' && autoShieldOn(now)){                                     // 熔断护盾:伙伴青色光环
+      ctx.save();ctx.globalCompositeOperation='lighter';
+      ctx.strokeStyle=FRAG_COL;ctx.shadowColor=FRAG_COL;ctx.shadowBlur=18;ctx.lineWidth=3;
+      ctx.globalAlpha=0.5+0.3*Math.sin(now/160);
+      ctx.beginPath();ctx.arc(HITX()-W*0.05,H*0.5,46,0,7);ctx.stroke();
+      ctx.globalAlpha=0.25;ctx.beginPath();ctx.arc(HITX()-W*0.05,H*0.5,52,0,7);ctx.stroke();
+      ctx.restore();
+    }
+    if(phase==='game' && now<hpLockUntil){                                       // 不熄:金色火环(血线锁定中)
+      ctx.save();ctx.globalCompositeOperation='lighter';
+      ctx.strokeStyle=cssCol('--gold');ctx.shadowColor=cssCol('--gold');ctx.shadowBlur=22;ctx.lineWidth=3;
+      ctx.globalAlpha=0.55+0.35*Math.sin(now/110);
+      ctx.beginPath();ctx.arc(HITX()-W*0.05,H*0.5,40+2*Math.sin(now/70),0,7);ctx.stroke();
+      ctx.restore();
+    }
   }
 
   // beams / balls / particles / pops = battle FX only — hidden on menus / cutscene / 站好确认 / 倒数
@@ -1437,9 +2034,15 @@ function render(now){
 
   // balls
   for(const b of balls){
-    if(b.hit||b.missed) continue;
-    const prog=(now-(b.tHit-cfg.approach))/cfg.approach; // 0..1
-    const x=SPAWNX()+(HITX()-SPAWNX())*prog, y=laneY(b.lane);
+    if(b.hit) continue;
+    const x=ballX(b,now), y=laneY(b.lane);
+    if(b.missed){                                        // 漏掉的攻击:暗下来,继续飞向玩家
+      ctx.save();ctx.globalAlpha=0.4;
+      glowCircle(x,y,13,cssCol(b.hand==='left'?'--blue':'--red'),10);
+      ctx.restore();
+      continue;
+    }
+    const prog=(now-(b.tHit-cfg.approach))/cfg.approach; // 1 = 判定区中心
     const col=cssCol(b.hand==='left'?'--blue':'--red');
     const near=1-Math.min(1,Math.abs(now+cfg.calibration-b.tHit)/cfg.approach);
     glowCircle(x,y,18+near*8,col,20+near*30);
@@ -1463,6 +2066,28 @@ function render(now){
 
   if(skillState.active) drawSkillWindow(now);
 
+  // ---- 车轮战换波横幅 ----
+  if(phase==='game' && waveBreakUntil>now){
+    const a=Math.min(1,(waveBreakUntil-now)/500);
+    ctx.save();ctx.textAlign='center';ctx.globalAlpha=0.25+0.75*a;
+    ctx.shadowColor=cssCol('--red');ctx.shadowBlur=18;
+    ctx.fillStyle=cssCol('--red');ctx.font='bold 34px Segoe UI';
+    ctx.fillText(waveBannerTxt,W/2,H*0.34);
+    ctx.restore();
+  }
+  // ---- 爆破中断:红色警报覆盖 ----
+  if(phase==='game' && aborting){
+    const k=0.5+0.5*Math.sin(performance.now()/90);
+    ctx.save();
+    ctx.fillStyle='rgba(255,30,30,'+(0.10+0.10*k)+')';ctx.fillRect(0,0,W,H);
+    ctx.textAlign='center';
+    ctx.fillStyle='rgba(255,90,60,'+(0.75+0.25*k)+')';ctx.font='bold 44px Segoe UI';
+    ctx.fillText(cfg.lang==='en'?'⚠ DETONATION · STRUCTURE COLLAPSING':'⚠ 物理爆破 · 结构坍塌',W/2,H*0.40);
+    ctx.fillStyle='#ffd23a';ctx.font='bold 26px Segoe UI';
+    ctx.fillText(cfg.lang==='en'?'EVACUATE — !':'撤离——!',W/2,H*0.40+46);
+    ctx.restore();
+  }
+
   // ---- HUD / overlays per phase ----
   if(phase==='menu') drawMenu(now);
   else if(phase==='loadmenu') drawLoad(now);
@@ -1473,6 +2098,7 @@ function render(now){
   else if(phase==='getset') drawGetSet(now);
   else if(phase==='menu_state') drawStateMenu(now);
   else if(phase==='practice') drawTester(now);
+  else if(phase==='calib') drawCalib(now);
   else if(phase==='tutorial') drawTutorial(now);
   else if(phase==='skilltutorial') drawSkillTutorial(now);
   else if(phase==='getready') drawGetReady();
@@ -1507,13 +2133,39 @@ function hud(now){
   if(!noSkills) drawSkillHud(now);
   bar(W*0.52,104,W*0.40,16,enemyHP/levelMaxHP,cssCol('--red'),'ENEMY');
   bar(28,104,W*0.30,16,playerHP/MAX_PLAYER_HP,cssCol('--blue'),'YOU');
+  // ---- 车轮战波次指示 ----
+  const lvW=(!trainingMode && LEVELS[currentLevel])||null;
+  if(lvW && lvW.phases){
+    ctx.save();ctx.textAlign='right';ctx.fillStyle='#ff9a7a';ctx.font='bold 13px Segoe UI';
+    ctx.fillText((cfg.lang==='en'?'WAVE ':'第 ')+battleWave+(cfg.lang==='en'?'':' 波'), W*0.92, 98);
+    ctx.restore();
+  }
+  // ---- 伙伴自动技能小徽章(YOU 血条右侧,青色;激活时发光) ----
+  const ad=autoDef();
+  if(ad){
+    const st=autoState;
+    const on = ad.id==='overclock' ? st.ocOn : (ad.id==='buffer' ? st.charges>0 : now<st.activeUntil);
+    const cd = Math.max(0,(st.cdUntil-now)/1000);
+    let tail='';
+    if(ad.id==='buffer') tail=' '+'◆'.repeat(st.charges)+'◇'.repeat(Math.max(0,ad.maxCharges-st.charges))+' '+st.perfCount+'/'+ad.perfEvery;
+    else if(ad.id==='strike') tail=' '+(combo%ad.comboEvery)+'/'+ad.comboEvery;
+    else if(ad.id==='guard') tail=st.guardUsed?(cfg.lang==='en'?' · used':' · 已用'):(cfg.lang==='en'?' · ready':' · 待命');
+    else if(ad.id==='overclock' && on) tail=' ×'+ad.scoreMul;
+    else if(on) tail=' · ON';
+    else if(cd>0.1 && (ad.id==='sync'||ad.id==='aegis')) tail=' · CD '+cd.toFixed(0)+'s';
+    ctx.save();ctx.textAlign='left';ctx.font='bold 14px Segoe UI';
+    if(on){ctx.shadowColor=FRAG_COL;ctx.shadowBlur=12;}
+    ctx.fillStyle=on?FRAG_COL:'rgba(127,224,255,.55)';
+    ctx.fillText('◈ '+autoName(ad)+tail, W*0.345, 117);
+    ctx.restore();
+  }
   ctx.fillStyle='#fff';ctx.textAlign='left';
   ctx.font='bold 30px Segoe UI';ctx.fillText(score.toString().padStart(6,'0'),28,160);
   if(combo>1){ctx.fillStyle=cssCol('--gold');ctx.font='bold 40px Segoe UI';
     ctx.fillText(combo+' COMBO',28,206);}
   // diagnostics
   ctx.fillStyle='var(--dim)';ctx.fillStyle='#8a93b8';ctx.font='12px Segoe UI';ctx.textAlign='right';
-  ctx.fillText(`FPS ${fps|0} · 检测 ${detLatency.toFixed(0)}ms · P${stats.perfect}/G${stats.good}/M${stats.miss}`,cv.width-16,cv.height-14);
+  ctx.fillText(`FPS ${fps|0} · 检测 ${detLatency.toFixed(0)}ms · P${stats.perfect}/G${stats.good}/M${stats.miss}/拦${stats.clear||0}`,cv.width-16,cv.height-14);
 }
 
 function meter(x,y,w,h,frac,thr,col,label,valTxt,live){
@@ -1592,7 +2244,7 @@ function drawTutorial(now){
   ctx.fillText(T('tut.hint'), W/2, H-16);
 }
 function drawSkillTutorial(now){
-  const W=cv.width,H=cv.height,slot=['A','B'][skillTut.slotIndex],def=skillDefForSlot(slot);
+  const W=cv.width,H=cv.height,slot=['A','B'][skillTut.slotIndex],def=skillDefForSlot(slot)||SKILLS[SKILL_ORDER[skillTut.slotIndex]];
   const seq=def.sequence, expected=seq[Math.min(skillTut.seqIndex,seq.length-1)];
   const col=cssCol(expected.hand==='left'?'--blue':'--red');
   ctx.textAlign='center';
@@ -1657,7 +2309,7 @@ function drawSkillWindow(now){
   // bottom cue strip: name + step dots + window timer (text lives at the bottom, no floating mid-screen words)
   ctx.textAlign='center';
   ctx.fillStyle=cssCol('--gold');ctx.font='bold 22px Segoe UI';
-  ctx.fillText(def.name+' — 打亮起的那条轨道', W/2, H-78);
+  ctx.fillText((cfg.lang==='en'?(def.name_en+' — hit the lit lane'):(def.name+' — 打亮起的那条轨道')), W/2, H-78);
   const startX=W/2-(seq.length-1)*36/2;
   for(let i=0;i<seq.length;i++){
     const m=seq[i], c=cssCol(m.hand==='left'?'--blue':'--red');
@@ -1671,11 +2323,13 @@ function drawSkillWindow(now){
 }
 function drawSkillHud(now){
   if(phase!=='game' && phase!=='gameover') return;
+  const en=cfg.lang==='en', nm=d=>en?d.name_en:d.name;
   const W=cv.width, events=skillEvents();
   const durationMs=((midiSong&&midiSong.durationSec)?midiSong.durationSec*1000:fallbackTime(MIDI_FALLBACK_BARS))||1;
   const songT=now%durationMs;
-  let next=null; for(let k=skillState.nextEvent;k<events.length;k++){ next=events[k]; break; }
+  let next=null; for(let k=skillState.nextEvent;k<events.length;k++){ if(skillDefForSlot(events[k].slot)){ next=events[k]; break; } }   // 只看已装备槽
   const active=skillState.active;
+  let avail=null; for(const s of ['A','B']){ if(skillState.available[s]){ avail=skillState.available[s]; break; } }   // 就绪中的技能
   // ---- slim neon skill timeline (no boxes) ----
   const tlX=W*0.32, tlY=46, tlW=W*0.36;
   ctx.save();
@@ -1683,6 +2337,7 @@ function drawSkillHud(now){
   ctx.beginPath();ctx.moveTo(tlX,tlY);ctx.lineTo(tlX+tlW,tlY);ctx.stroke();
   ctx.globalCompositeOperation='lighter';
   for(const ev of events){                              // upcoming skill markers bloom gold as they near
+    if(!skillDefForSlot(ev.slot)) continue;             // 未装备的槽不画在时间轴上
     const px=tlX+((ev.timeMs%durationMs)/durationMs)*tlW;
     const nr=Math.max(0,1-Math.abs((ev.timeMs%durationMs)-songT)/1400);
     ctx.globalAlpha=0.35+0.65*nr;ctx.fillStyle=cssCol('--gold');
@@ -1693,18 +2348,26 @@ function drawSkillHud(now){
   const playX=tlX+(songT/durationMs)*tlW;             // playhead
   ctx.save();ctx.strokeStyle='rgba(255,255,255,.7)';ctx.lineWidth=2;
   ctx.beginPath();ctx.moveTo(playX,tlY-9);ctx.lineTo(playX,tlY+9);ctx.stroke();ctx.restore();
-  ctx.textAlign='center';ctx.font='bold 13px Segoe UI';
-  ctx.fillStyle=active?cssCol('--gold'):'#8a93b8';
-  ctx.fillText(active?('技能窗 · '+active.skill.name):(next?('下一技能 '+Math.max(0,(next.timeMs-now)/1000).toFixed(1)+'s'):'技能就绪'),W/2,tlY-16);
-  // ---- slot name chips in the corners (glow when firing) ----
+  // center status line: active window / READY prompt / countdown
+  ctx.textAlign='center';
+  let label;
+  if(active) label=(en?'SKILL · ':'技能窗 · ')+nm(active.skill);
+  else if(avail) label='▼ '+nm(avail.def)+(en?' READY — ':' 就绪 — ')+triggerLabel(avail.def)+(en?' to fire':'发动');
+  else if(next) label=(en?'next skill ':'下一技能 ')+Math.max(0,(next.timeMs-now)/1000).toFixed(1)+'s';
+  else label=en?'no skill equipped':'未装备技能';
+  ctx.fillStyle=(active||avail)?cssCol('--gold'):'#8a93b8';
+  if(avail&&!active){ ctx.save();ctx.shadowColor=cssCol('--gold');ctx.shadowBlur=16;ctx.font='bold 17px Segoe UI';ctx.fillText(label,W/2,tlY-15);ctx.restore(); }
+  else { ctx.font='bold 13px Segoe UI'; ctx.fillText(label,W/2,tlY-16); }
+  // ---- slot name chips in the corners (glow when ready / firing) ----
   ['A','B'].forEach((slot,i)=>{
-    const def=skillDefForSlot(slot), hot=active&&active.slot===slot, cx2=i===0?96:W-96;
+    const def=skillDefForSlot(slot), hot=active&&active.slot===slot, rdy=!!skillState.available[slot], cx2=i===0?96:W-96;
     ctx.save();ctx.textAlign='center';
-    if(hot){ctx.shadowColor=cssCol('--gold');ctx.shadowBlur=18;}
-    ctx.fillStyle=hot?cssCol('--gold'):'#aeb8db';ctx.font='bold 15px Segoe UI';
-    ctx.fillText(def.name,cx2,40);
-    ctx.fillStyle=def.effect.type==='damage'?cssCol('--red'):cssCol('--green');ctx.font='11px Segoe UI';
-    ctx.fillText(def.effect.type==='damage'?'伤害':'回血',cx2,56);
+    if(!def){ ctx.fillStyle='rgba(150,160,200,.40)';ctx.font='bold 14px Segoe UI';ctx.fillText('['+slot+'] '+(en?'empty':'空'),cx2,44);ctx.restore();return; }
+    if(hot||rdy){ctx.shadowColor=cssCol('--gold');ctx.shadowBlur=hot?18:10;}
+    ctx.fillStyle=hot?cssCol('--gold'):rdy?'#ffe9a8':'#aeb8db';ctx.font='bold 15px Segoe UI';
+    ctx.fillText(nm(def),cx2,40);
+    ctx.fillStyle=def.effect.type==='damage'?cssCol('--red'):def.effect.type==='lock'?cssCol('--gold'):cssCol('--green');ctx.font='11px Segoe UI';
+    ctx.fillText(en?(def.effect.type==='damage'?'DMG':def.effect.type==='lock'?'LOCK':'HEAL'):(def.effect.type==='damage'?'伤害':def.effect.type==='lock'?'锁血':'回血'),cx2,56);
     ctx.restore();
   });
 }
@@ -1726,6 +2389,7 @@ function handleMenuClick(ev){
   const [x,y]=canvasXY(ev);
   if(phase==='cutscene'){ advanceScene(); return; }     // click = next line
   if(phase==='getset'){ confirmReady(); return; }       // click = confirm ready
+  if(phase==='calib'){ cancelCalib(); return; }         // click = cancel calibration
   if(pauseMenuOpen){ for(const b of menuBtns){ if(x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h){ b.action(); return; } } return; }
   if(isMenuPhase()){
     for(const b of menuBtns){ if(x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h){ b.action(); return; } }
@@ -1734,7 +2398,11 @@ function handleMenuClick(ev){
   if(gameOver){ if(!trainingMode && win) proceedAfterWin(); else { restart(); toast('↺'); } }   // 胜=继续 / 训练&败=再来
 }
 function doNewGame(){
-  saveData.seenScenes=[]; saveData.lastLevel=0; writeSaveData(saveData);   // 新游戏:从头重看剧情(保留已解锁关卡)
+  saveData.seenScenes=[]; saveData.lastLevel=0;
+  saveData.unlockedSkills=[];                              // 新游戏:技能/伙伴模块清零,跟着剧情重新获得(修复:开局自检就有技能)
+  saveData.equipped={A:null,B:null,auto:null};
+  equippedSkills={A:null,B:null}; equippedAuto=null;
+  writeSaveData(saveData);                                 // (保留已解锁关卡/通关记录,选关重打不受影响)
   trainingMode=false;
   readyThen(()=>startLevel(0));   // 站好确认 → 序章开场
 }
@@ -1888,7 +2556,7 @@ function openTrainingMenu(){
 }
 function startTraining(i){
   const s=TRAINING_SONGS[i]; trainingMode=true; gmenu=null;
-  levelMaxHP=MAX_ENEMY_HP; cfg.bpm=s.bpm; cfg.attackGap=60000/cfg.bpm*1.5; cfg.approach=1600;
+  levelMaxHP=MAX_ENEMY_HP; cfg.bpm=s.bpm; currentGapMul=1.5; baseApproach=1600; cfg.attackGap=60000/cfg.bpm*currentGapMul; cfg.approach=snapApproach(baseApproach);
   noSkills=false; battleHint='';          // 训练有技能(曲子自带触发轨)
   loadLevelBgm(s.bgm);
   readyThen(()=>enterGame());            // 站好确认 → 直接开打(无剧情)
@@ -2049,10 +2717,191 @@ function drawSpeaker(who, x, y, now){
   }
   ctx.restore();
 }
+// 内心世界背景:无序漂移色块;shaking=整体颤动 + 红色裂纹(mind_shaking)。
+function drawMindBg(now, shaking){
+  const W=cv.width,H=cv.height;
+  const jx=shaking?(Math.random()-0.5)*12:0, jy=shaking?(Math.random()-0.5)*12:0;
+  ctx.save(); ctx.translate(jx,jy);
+  ctx.fillStyle='#0a0712'; ctx.fillRect(-30,-30,W+60,H+60);
+  const cols=8, rows=5, cw=(W+60)/cols, ch=(H+60)/rows;
+  const hues=['#3a1a5e','#5e1a3a','#1a3a5e','#5e3a1a','#2a5e3a','#4a2a5e','#5e1a4a'];
+  ctx.globalCompositeOperation='lighter';
+  for(let r=0;r<rows;r++) for(let c=0;c<cols;c++){
+    const seed=r*13+c*7, hue=hues[seed%hues.length];
+    const a=0.16+0.12*Math.sin(now/700+seed);
+    const dx=Math.sin(now/900+seed)*7, dy=Math.cos(now/1100+seed*1.3)*7;
+    ctx.globalAlpha=Math.max(0,a); ctx.fillStyle=hue;
+    ctx.fillRect(-30+c*cw+dx, -30+r*ch+dy, cw-5, ch-5);
+  }
+  ctx.globalAlpha=1;
+  if(shaking){
+    ctx.strokeStyle='rgba(255,80,120,0.55)';ctx.lineWidth=2;ctx.shadowColor='#ff4d6d';ctx.shadowBlur=10;
+    for(let i=0;i<5;i++){ let xx=W*(0.16+0.16*i)+(Math.random()-0.5)*24, yy=0; ctx.beginPath(); ctx.moveTo(xx,yy);
+      while(yy<H){ yy+=36+Math.random()*46; xx+=(Math.random()-0.5)*46; ctx.lineTo(xx,yy); } ctx.stroke(); }
+  }
+  ctx.restore();
+}
+// 公司内网背景:冷色调机房 —— 渐变 + 网格 + 一排排服务器机柜(闪烁状态灯) + 下落的数据包。
+function drawIntranetBg(now){
+  const W=cv.width,H=cv.height;
+  const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#06131b'); g.addColorStop(0.6,'#04101a'); g.addColorStop(1,'#02080e');
+  ctx.fillStyle=g; ctx.fillRect(-20,-20,W+40,H+40);
+  ctx.save();
+  ctx.strokeStyle='rgba(40,170,160,0.08)'; ctx.lineWidth=1;          // faint grid
+  for(let i=0;i<=16;i++){ const x=W*i/16; ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke(); }
+  for(let j=0;j<=9;j++){ const y=H*j/9; ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke(); }
+  const racks=10, rw=W/racks, rh=H*0.5, ry=H*0.15;                   // server racks (back wall)
+  for(let r=0;r<racks;r++){
+    const x=r*rw+6;
+    ctx.fillStyle='rgba(10,26,32,0.85)'; ctx.fillRect(x, ry, rw-12, rh);
+    ctx.strokeStyle='rgba(40,150,150,0.22)'; ctx.lineWidth=1; ctx.strokeRect(x, ry, rw-12, rh);
+    ctx.save(); ctx.globalCompositeOperation='lighter';
+    for(let u=0;u<12;u++){ const ly=ry+10+u*(rh-20)/12;
+      ctx.fillStyle='rgba(40,120,120,0.16)'; ctx.fillRect(x+10, ly, rw-26, 2);   // unit divider
+      const on=Math.sin(now/400 + r*1.7 + u*0.9) > 0.4;
+      ctx.fillStyle = on ? (((u+r)%4) ? 'rgba(60,255,190,0.85)':'rgba(255,190,70,0.85)') : 'rgba(40,90,90,0.35)';
+      ctx.fillRect(x+5, ly-1, 4, 4);   // status LED
+    }
+    ctx.restore();
+  }
+  ctx.save(); ctx.globalCompositeOperation='lighter';               // descending data packets
+  for(let c=0;c<16;c++){
+    const x=(c*131)%W;
+    const y=(((now*0.18)*(1+(c%3)*0.5) + c*173) % (H+60)) - 30;
+    ctx.fillStyle='rgba(70,235,205,'+(0.12+0.05*(c%3))+')';
+    ctx.fillRect(x, y, 2, 22);
+  }
+  ctx.restore();
+  ctx.restore();
+}
+// 废墟(第三章) — 被物理爆破的数据中心:倾倒的机柜剪影、断裂电缆的火花、
+// 红色应急灯旋扫、弥漫的尘雾与下落的灰。与 slum 的暖闹相反:死寂 + 危险。
+function drawRuinsBg(now){
+  const W=cv.width,H=cv.height;
+  const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#0a0a0c'); g.addColorStop(0.6,'#121013'); g.addColorStop(1,'#17130f');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  // 红色应急灯:缓慢旋扫的光锥
+  ctx.save();ctx.globalCompositeOperation='lighter';
+  const swp=(now/2400)%2;                     // 0..2
+  const bx=W*0.22, by=H*0.18;
+  const ang=Math.PI*0.25+Math.sin(now/2400)*0.9;
+  const grd=ctx.createLinearGradient(bx,by,bx+Math.cos(ang)*W,by+Math.sin(ang)*W);
+  grd.addColorStop(0,'rgba(255,60,50,'+(0.10+0.05*Math.sin(now/300))+')'); grd.addColorStop(1,'rgba(255,60,50,0)');
+  ctx.fillStyle=grd;
+  ctx.beginPath();ctx.moveTo(bx,by);
+  ctx.lineTo(bx+Math.cos(ang-0.16)*W*1.4,by+Math.sin(ang-0.16)*W*1.4);
+  ctx.lineTo(bx+Math.cos(ang+0.16)*W*1.4,by+Math.sin(ang+0.16)*W*1.4);
+  ctx.closePath();ctx.fill();ctx.restore();
+  // 倾倒的机柜剪影(前后两层,不同倾角)
+  const racks=[[0.06,-0.28],[0.16,0.12],[0.30,-0.08],[0.43,0.34],[0.58,-0.2],[0.71,0.06],[0.84,-0.36],[0.94,0.18]];
+  racks.forEach(([fx,tilt],i)=>{
+    const rw=W*0.055, rh=H*(0.30+((i*37)%20)/100), x=W*fx, yb=H*0.92;
+    ctx.save();ctx.translate(x,yb);ctx.rotate(tilt);
+    ctx.fillStyle=i%2?'#0c0b10':'#131118';
+    ctx.fillRect(-rw/2,-rh,rw,rh);
+    ctx.fillStyle='rgba(120,140,180,0.08)';
+    for(let yy=-rh+8; yy<-10; yy+=14) ctx.fillRect(-rw/2+4,yy,rw-8,3);   // 熄灭的指示灯排
+    ctx.restore();
+  });
+  // 断裂电缆:垂落 + 间歇火花
+  ctx.save();
+  for(let k=0;k<4;k++){
+    const x0=W*(0.14+k*0.24), y0=H*(0.02+((k*31)%8)/100), len=H*(0.22+((k*53)%18)/100);
+    ctx.strokeStyle='rgba(90,90,110,0.5)';ctx.lineWidth=2;
+    ctx.beginPath();ctx.moveTo(x0,y0);ctx.quadraticCurveTo(x0+14,y0+len*0.6,x0+Math.sin(now/700+k)*8,y0+len);ctx.stroke();
+    const sparkOn=Math.sin(now/(430+k*170)+k*2.2)>0.93;      // 间歇性打火
+    if(sparkOn){
+      const sx=x0+Math.sin(now/700+k)*8, sy=y0+len;
+      ctx.save();ctx.globalCompositeOperation='lighter';
+      ctx.fillStyle='rgba(255,220,140,0.9)';
+      for(let s2=0;s2<5;s2++){ const a2=Math.random()*Math.PI, r2=3+Math.random()*10;
+        ctx.fillRect(sx+Math.cos(a2)*r2, sy+Math.sin(a2)*r2*0.6, 2, 2); }
+      ctx.restore();
+    }
+  }
+  ctx.restore();
+  // 尘雾 + 缓缓下落的灰
+  ctx.save();
+  ctx.fillStyle='rgba(160,150,140,0.045)';ctx.fillRect(0,H*0.55,W,H*0.45);
+  for(let k=0;k<30;k++){
+    const yy=((now*(0.008+((k*13)%7)*0.002) + k*97) % (H+40))-20;
+    const xx=((k*173)%W) + Math.sin(now/1100+k)*10;
+    ctx.fillStyle='rgba(200,190,175,'+(0.05+((k*7)%4)*0.02)+')';
+    ctx.fillRect(xx,yy,2,2);
+  }
+  ctx.restore();
+}
+// 自由地/贫民窟(第二章) — 野生数字生命的棚户区:歪斜堆叠的棚屋、色调不齐的暖灯、
+// 垂挂的电缆、缓缓上浮的"孢子"光点。和公司内网的冷蓝形成对照。
+function drawSlumBg(now){
+  const W=cv.width,H=cv.height;
+  const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#120a08'); g.addColorStop(0.55,'#1c1208'); g.addColorStop(1,'#241108');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  ctx.save();ctx.globalCompositeOperation='lighter';                     // 地平线暖雾
+  const gg=ctx.createLinearGradient(0,H*0.45,0,H*0.85);
+  gg.addColorStop(0,'rgba(255,140,40,0.10)'); gg.addColorStop(1,'rgba(255,60,120,0)');
+  ctx.fillStyle=gg; ctx.fillRect(0,H*0.45,W,H*0.4); ctx.restore();
+  // 两层视差的歪斜棚屋
+  const layers=[{base:0.78,hh:0.26,step:150,seed:11,col:'#170d06'},{base:0.88,hh:0.40,step:104,seed:29,col:'#0d0704'}];
+  for(const L2 of layers){
+    let x=-30, i=L2.seed>>>0;
+    while(x<W+40){
+      i=(i*1103515245+12345)&0x7fffffff;
+      const w=L2.step*(0.5+(i%1000)/1000*0.8);
+      const h=H*L2.hh*(0.35+((i>>5)%1000)/1000*0.75);
+      const tilt=(((i>>7)%9)-4)*0.012;
+      const yTop=H*L2.base-h;
+      ctx.save();
+      ctx.translate(x+w/2,H*L2.base); ctx.rotate(tilt); ctx.translate(-(x+w/2),-H*L2.base);
+      ctx.fillStyle=L2.col; ctx.fillRect(x,yTop,w-6,H*L2.base-yTop);
+      ctx.fillStyle='rgba(255,190,90,0.06)'; ctx.fillRect(x,yTop,w-6,3);  // 屋檐微光
+      ctx.globalCompositeOperation='lighter';                              // 色调不齐、明灭不齐的杂灯
+      for(let wy=yTop+10; wy<H*L2.base-8; wy+=15)
+        for(let wx=x+7; wx<x+w-14; wx+=13)
+          if(((wx*13+wy*7+i)>>2)%7===0){
+            const ph=Math.sin(now/(600+((wx+wy)%5)*220)+wx*0.7+wy);
+            if(ph>-0.6){
+              const cc=((wx+wy)>>3)%3;
+              ctx.fillStyle=cc===0?'rgba(255,170,60,0.5)':cc===1?'rgba(80,220,180,0.42)':'rgba(255,90,140,0.4)';
+              ctx.fillRect(wx,wy,4,5);
+            }
+          }
+      ctx.restore();
+      x+=w;
+    }
+  }
+  // 垂挂的电缆
+  ctx.save();ctx.strokeStyle='rgba(255,200,120,0.14)';ctx.lineWidth=1.5;
+  for(let k=0;k<5;k++){
+    const x0=W*(0.05+k*0.22), x1=x0+W*0.16, sag=26+((k*37)%22), y0=H*(0.30+((k*53)%12)/100);
+    ctx.beginPath();ctx.moveTo(x0,y0);ctx.quadraticCurveTo((x0+x1)/2,y0+sag,x1,y0+((k%2)?8:-6));ctx.stroke();
+  }
+  ctx.restore();
+  // 上浮的"孢子"光点(野生数字生命的气息)
+  ctx.save();ctx.globalCompositeOperation='lighter';
+  for(let k=0;k<26;k++){
+    const yy=H - ((now*(0.012+((k*7)%5)*0.004) + k*173) % (H*0.9));
+    const xx=((k*211)%W) + Math.sin(now/800+k*1.7)*16;
+    const a=0.10+0.10*Math.sin(now/300+k);
+    ctx.fillStyle=(k%3===0)?('rgba(120,255,190,'+a+')'):(k%3===1)?('rgba(255,180,90,'+a+')'):('rgba(255,120,170,'+a+')');
+    ctx.beginPath();ctx.arc(xx,yy,1.6+(k%3),0,7);ctx.fill();
+  }
+  ctx.restore();
+}
 function drawCutscene(now){
   if(!scene){ phase='menu'; return; }
   const W=cv.width,H=cv.height;
-  drawCityBg(now);
+  let _bg=scene.data.bg||'city';                          // 背景:scene.bg;某行可带 bg 覆盖(如切到 mind_shaking)
+  for(let i=0;i<=Math.min(sceneIdx,scene.data.lines.length-1);i++){ if(scene.data.lines[i].bg) _bg=scene.data.lines[i].bg; }
+  if(_bg==='mind') drawMindBg(now,false);
+  else if(_bg==='mind_shaking') drawMindBg(now,true);
+  else if(_bg==='intranet') drawIntranetBg(now);
+  else if(_bg==='slum') drawSlumBg(now);
+  else if(_bg==='ruins') drawRuinsBg(now);
+  else drawCityBg(now);
   const line=scene.data.lines[Math.min(sceneIdx, scene.data.lines.length-1)], who=line.who;
   if(who==='hero') drawSpeaker('hero', W*0.30, H*0.42, now);
   else if(who==='frag') drawSpeaker('frag', W*0.70, H*0.42, now);
@@ -2065,7 +2914,9 @@ function drawCutscene(now){
   wrapText(locLine(line,cfg.lang), bx+24, by+(nm?64:44), bw-48, 32);
   ctx.textAlign='right';ctx.fillStyle='#6f7aa5';ctx.font='12px Segoe UI';ctx.fillText((sceneIdx+1)+' / '+scene.data.lines.length, bx+bw-18, by+bh-14);
   ctx.textAlign='center';ctx.fillStyle='#8a93b8';ctx.font='13px Segoe UI';ctx.globalAlpha=0.6+0.4*Math.sin(now/350);
-  ctx.fillText(cfg.lang==='en'?'both fists down = next · both up = back · (click/space)':'双手同时下击 = 下一句 · 双手上击 = 上一句 · (点击/空格)', W/2, H*0.62);
+  ctx.fillText(cfg.lang==='en'
+    ? ('both fists down = next · both up = back'+(selfCheckTaught()?' · cross fists = self-check':'')+' · (click/space)')
+    : ('双手同时下击 = 下一句 · 双手上击 = 上一句'+(selfCheckTaught()?' · 平拳交叉 = 自检':'')+' · (点击/空格)'), W/2, H*0.62);
   ctx.globalAlpha=1;
 }
 function drawGetSet(now){
@@ -2207,10 +3058,14 @@ function frame(){
       try{ detectPose(now); }catch(e){ console.error('detectPose:',e); }  // isolate: game keeps running
       try{ scheduleMidi(); }catch(e){ console.error('scheduleMidi:',e); }
       try{ scheduleClicks(); }catch(e){ console.error('scheduleClicks:',e); }
+      try{ scheduleCalibClicks(); }catch(e){ console.error('scheduleCalibClicks:',e); }
+      try{ scheduleAmbient(); }catch(e){ console.error('scheduleAmbient:',e); }
       now=gameNow();   // detectPose may have reset the clock (replay/skip gesture) → refresh before update
       update(now,dt);                                                      // spawns the notes
     }
     render(now);
+    if(fadeFrom){ const k=(performance.now()-fadeFrom)/FADE_MS;   // 黑屏过渡:从纯黑淡入
+      if(k<1){ ctx.setTransform(1,0,0,1,0,0); ctx.fillStyle='rgba(0,0,0,'+(1-Math.max(0,k))+')'; ctx.fillRect(0,0,cv.width,cv.height); } else fadeFrom=0; }
   }catch(e){ console.error('frame:',e); }
   requestAnimationFrame(frame);   // ALWAYS reschedule — the loop must never die
 }
@@ -2224,16 +3079,23 @@ async function start(){
     const stream=await navigator.mediaDevices.getUserMedia({video:{width:640,height:480,facingMode:'user'},audio:false});
     video.srcObject=stream; await video.play();
   }catch(e){ fail('摄像头打开失败：'+e.message+'\n请确认已允许摄像头权限。若用 file:// 打开且被拦截，请改用本地服务器(见 README)。'); return; }
+  saveData = loadSaveData();
+  applySavedSettings(saveData);                       // 先恢复设置(含识别模型选择),再加载模型
   try{ startBtn.textContent='加载检测模型…'; await initPose(); }
   catch(e){ fail('模型加载失败：'+e.message+'\n需要联网下载 MediaPipe 模型(首次)。'); return; }
   actx=new (window.AudioContext||window.webkitAudioContext)();
-  master=actx.createGain(); master.gain.value=0.9; master.connect(actx.destination);
+  master=actx.createGain(); master.gain.value=0.9;
+  {  // 母线轻软削波(tanh):鼓峰被压出"糊边"的攻击感,小音量(对话环境声)基本无感
+    const drive=actx.createWaveShaper(), n=1024, curve=new Float32Array(n);
+    for(let i=0;i<n;i++){ const x=i/(n-1)*2-1; curve[i]=Math.tanh(2.2*x)/Math.tanh(2.2); }
+    drive.curve=curve; drive.oversample='2x';
+    master.connect(drive).connect(actx.destination);
+  }
   await actx.resume();
   await loadBattleMidi();
   resetGame();
   t0 = actx.currentTime*1000 + 300;   // small lead so clock is positive
-  saveData = loadSaveData();
-  applySavedSettings(saveData);                       // restore language + saved control tuning
+  restoreLoadout();                                   // restore equipped skills (A/B/auto) from save
   syncUI();
   phase = cfg.testMode ? 'practice' : 'menu';         // normal start = main menu
   tutStep=0; tutReps=0; tutFlash=null; tutHoldUntil=0;
@@ -2245,7 +3107,7 @@ function restart(){
   paused=false;
   if(phase==='game' || phase==='gameover'){ enterGame(); return; }     // replay the battle
   // otherwise go back to the start ask (or practice)
-  stopAudioPlayback();
+  stopAudioPlayback(); stopAmbient();
   resetGame();
   if(actx) t0=actx.currentTime*1000+300;
   phase = cfg.testMode ? 'practice' : 'menu';        // R / restart → back to main menu
@@ -2266,6 +3128,7 @@ function togglePause(){          // Space — opens/closes the pause menu (which
   if(pauseMenuOpen) closePause(); else openPauseMenu();
 }
 window.addEventListener('keydown',e=>{
+  if(started && phase==='calib' && e.code==='Escape'){ e.preventDefault(); cancelCalib(); return; }
   if(started && phase==='getset' && (e.code==='Space'||e.code==='Enter')){ e.preventDefault(); confirmReady(); return; }
   if(started && phase==='menu_state'){
     if(e.code==='Escape'){ e.preventDefault(); closeStateMenu(); return; }
@@ -2303,12 +3166,21 @@ bindRange('cfgLineLow','lineLow','vLineLow',v=>v.toFixed(2));
 bindRange('cfgLineLeft','lineLeft','vLineLeft',v=>v.toFixed(2));
 bindRange('cfgLineRight','lineRight','vLineRight',v=>v.toFixed(2));
 bindRange('cfgBpm','bpm','vBpm');
-bindRange('cfgApproach','approach','vApproach');
+bindRange('cfgApproachMul','approachMul','vApproachMul',v=>v.toFixed(2));
+document.getElementById('cfgApproachMul').addEventListener('change',()=>{ cfg.approach=snapApproach(baseApproach); });   // 立即生效(含战斗中)
 bindRange('cfgCal','calibration','vCal');
 bindRange('cfgWin','goodWindow','vWin');
 document.getElementById('cfgMode').addEventListener('change',e=>{cfg.mode=e.target.value; persistSettings();});
+document.getElementById('cfgPoseModel').addEventListener('change',e=>{cfg.poseModel=e.target.value; persistSettings(); if(started) reinitPose();});
 document.getElementById('cfgSkillA').addEventListener('change',e=>{equippedSkills.A=e.target.value;});
 document.getElementById('cfgSkillB').addEventListener('change',e=>{equippedSkills.B=e.target.value;});
+document.getElementById('cfgAuto').addEventListener('change',e=>{equippedAuto=e.target.value||null;});
+document.getElementById('calibBtn').addEventListener('click',()=>{
+  if(!started){ toast('请先点击开始'); return; }
+  if(phase==='game'){ toast('战斗中不能校准，请先暂停退出'); return; }
+  document.getElementById('panel').classList.remove('show');
+  startCalib();
+});
 document.getElementById('crossBtn').addEventListener('click',e=>{cfg.requireCross=!cfg.requireCross;e.target.classList.toggle('on',cfg.requireCross);e.target.textContent=cfg.requireCross?'过线必须 ✓':'过线必须'; persistSettings();});
 document.getElementById('mirrorBtn').addEventListener('click',e=>{cfg.mirror=!cfg.mirror;e.target.classList.toggle('on',cfg.mirror);e.target.textContent=cfg.mirror?'镜像 ✓':'镜像'; persistSettings();});
 document.getElementById('dbgBtn').addEventListener('click',e=>{cfg.debug=!cfg.debug;e.target.classList.toggle('on',cfg.debug);e.target.textContent=cfg.debug?'调试叠加 ✓':'调试叠加';});
@@ -2316,8 +3188,10 @@ document.getElementById('dbgBtn').addEventListener('click',e=>{cfg.debug=!cfg.de
 function syncUI(){
   document.getElementById('cfgTest').value=cfg.testMode?'1':'0';
   document.getElementById('cfgMode').value=cfg.mode;
+  document.getElementById('cfgPoseModel').value=cfg.poseModel||'full';
   document.getElementById('cfgSkillA').value=equippedSkills.A;
   document.getElementById('cfgSkillB').value=equippedSkills.B;
+  document.getElementById('cfgAuto').value=equippedAuto||'';
   cfg.resetLevel=cfg.triggerLevel*0.6;
   const set=(id,v,f)=>{document.getElementById(id).value=v;};
   set('cfgTrig',cfg.triggerLevel);document.getElementById('vTrig').textContent=cfg.triggerLevel.toFixed(1);
@@ -2327,7 +3201,7 @@ function syncUI(){
   set('cfgLineLeft',cfg.lineLeft);document.getElementById('vLineLeft').textContent=cfg.lineLeft.toFixed(2);
   set('cfgLineRight',cfg.lineRight);document.getElementById('vLineRight').textContent=cfg.lineRight.toFixed(2);
   set('cfgBpm',cfg.bpm);document.getElementById('vBpm').textContent=cfg.bpm;
-  set('cfgApproach',cfg.approach);document.getElementById('vApproach').textContent=cfg.approach;
+  set('cfgApproachMul',cfg.approachMul);document.getElementById('vApproachMul').textContent=(cfg.approachMul||1).toFixed(2);
   set('cfgCal',cfg.calibration);document.getElementById('vCal').textContent=cfg.calibration;
   set('cfgWin',cfg.goodWindow);document.getElementById('vWin').textContent=cfg.goodWindow;
   document.getElementById('crossBtn').classList.toggle('on',cfg.requireCross);
