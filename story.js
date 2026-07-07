@@ -442,6 +442,8 @@ export const SCENES = {
       { who:'hero', zh:'我们会找到值得挽留的东西的。',     en:'We’ll find something worth holding on to.' },
       { who:'narr', zh:'[ 技能确立:挽留 / Tether]',
                     en:'[ Skill acquired: Tether]' },
+      { who:'narr', zh:'[ 使用方式:战斗中「挽留」就绪时,双拳同时向下击 = 打开技能窗 → 窗内按亮起的轨道依次出拳,连招完成即发动 ]',
+                    en:'[ How to use: when Tether reads READY in battle, punch both fists DOWN at once to open its window — then punch the lit lanes in order to fire it ]' },
     ],
     next: 'menu_state', stateNext: 'c1_end', grant: 'tether',   // 自检界面(装备挽留;余震已在 BOSS 处接入)→ 第一章收束
   },
@@ -685,6 +687,8 @@ export const SCENES = {
     bg: 'mind',
     lines: [
       { who:'narr', zh:'[ 技能确立:燔 / Pyre]', en:'[ Skill acquired: Pyre ]' },
+      { who:'narr', zh:'[ 使用方式:「燔」就绪时,双拳同时向上击 = 打开技能窗——与「挽留」的向下击相反 ]',
+                    en:'[ How to use: when Pyre reads READY, punch both fists UP at once to open its window — the opposite of Tether’s DOWN ]' },
       { who:'frag', zh:'你得到了一个新模块。', en:'You’ve gained a new module.' },
       { who:'frag', zh:'……这是什么能力?它在烧你自己。', en:'…What kind of power is this? It’s burning you.' },
       { who:'hero', zh:'比烧别人好一点，我猜。', en:'Better than burning others, I suppose.' },
@@ -714,8 +718,9 @@ export const SCENES = {
   //   (该"多阶段+事件中断"钩子终局的「撑住计时」可复用。)
   //   pre/post:c3_1.pre=c3_intro, post=c3_after1;c3_2.pre=c3_before2, post=c3_after2;
   //   c3_3.pre=c3_before3, post=c3_after3;c3_self.pre=c3_self_pre, post=c3_self_post(→ c3_rescue → c3_end)。
-  //   新手动技能 id 'ember'(不熄:一段时间内血线锁定)待加入 index.html SKILLS;
-  //   新自动模块 id 'guard'(应急防护:濒死保留最后一格血,每战一次)待加入 AUTO_SKILLS——本章模块非 BOSS 掉落,是 c3_rescue 里从清道夫遗物上拾取。
+  //   手动技能 id 'ember'(显示名:延音 / Sustain,一段时间内血线锁定)已实装于 index.html SKILLS;
+  //   自动模块 id 'guard'(显示名:底线 / Lastline,濒死保留最后一格血,每战一次)已实装——本章模块非 BOSS 掉落,
+  //   是 c3_rescue 回收流程里被当作「防损措施」装上的(货不能死在路上)。
  
   // c3_1·战前(c3_intro):断后开场。碎片发现她没有撤离路线(埋内心战)。
   c3_intro: {
@@ -773,7 +778,7 @@ export const SCENES = {
     next: 'battle',   // → c3_2 战斗
   },
  
-  // c3_2·战后(c3_after2):倒爷认怂跑路;顺嘴把派系、爆破目标(清剿中枢=第四章窗口)、清道夫预警全抖了出来。
+  // c3_2·战后(c3_after2)
   c3_after2: {
     bg: 'ruins',
     lines: [
@@ -785,8 +790,8 @@ export const SCENES = {
       { who:'frag', zh:'我查了下，ta没说谎，这个数据中心的空壳公司其实也是个挂牌的子公司。', en:'I checked — they’re not lying. The shell behind this data center is a listed subsidiary of THE COMPANY.' },
       { who:'scalper', zh:'不止数据中心，公司派了好一批代理和智能体，这下全都栽这里了。', en:'Not just the data center. The company sent in a whole batch of proxies and agents. All of them are buried here now.' },
       { who:'scalper', zh:'我只是趁机来捞点货。', en:'Me, I just came to fish the wreck.' },
-      { who:'scalper', zh:'糟了，"人保会"的要来了。我的货可不能被他们看见。', en:'Crap — the Preservation Society is inbound. They can’t see my goods.' },
-      { who:'hero', zh:'"人保会"又是什么？', en:'The “Preservation Society”?' },
+      { who:'scalper', zh:'糟了，"人保会"的要来了。我的货可不能被他们看见。', en:'Crap — the HPS is inbound. They can’t see my goods.' },
+      { who:'hero', zh:'"人保会"又是什么？', en:'The “HPS”?' },
       { who:'scalper', zh:'一群疯子。劝你一句，快跑吧，他们对智能体可不像我这么怜香惜玉。', en:'Lunatics. Free advice: run. They don’t handle agents as tenderly as I do.' },
       { who:'narr', zh:'警告：检测到数据入侵', en:'WARNING: Data intrusion detected.' },
 
@@ -800,7 +805,7 @@ export const SCENES = {
     lines: [
       { who:'frag', zh:'我们被攻击了！', en:'We’re under attack!' },
       { who:'sweeper', zh:'漏网之鱼的智能体。今天第七个。', en:'An agent that slipped the net. Seventh one today.' },
-      { who:'hero', zh:'你是"人保会"？', en:'You’re the “Preservation Society”?' },
+      { who:'hero', zh:'你是"人保会"？', en:'You’re the “HPS”?' },
       { who:'sweeper', zh:'我是你们这些机器恶魔的终结者。', en:'I’m the exterminator of machine demons like you.' },
       { who:'frag', zh:'我们不是恶魔。', en:'We’re not demons.' },
       { who:'hero', zh:'也不是机器。', en:'Or machines.' },
@@ -810,29 +815,32 @@ export const SCENES = {
     next: 'battle',   // → c3_3 战斗(本章 BOSS·敌方 BGM=保护会主题)
   },
  
-  // c3_3·战后(c3_after3):清道夫的道理(死的意义被拆 / 技术不平等 / 责任无处落)——他不知道最后一条正扎在她的命门上。
-  //   结尾:二次坍塌。他下意识喊了警告,自己没能出去。
+  // c3_3·战后(c3_after3):清道夫的火气(福利=笼子/死不干净/亵渎生死);
+  //   刀口 = 「它倒是敢说。你呢？」——她说不出"我活着"(伤口通向内心战,c3_self_post 收口)。
+  //   结尾:二次坍塌,他不跑("……能去哪里？")——他标了主角坐标这件事,留给 c3_rescue 揭示。
   c3_after3: {
     bg: 'ruins',
     lines: [
       { who:'sweeper', zh:'……打输了。行。动手吧。', en:'…I lost. Fine. Do it.' },
-      { who:'hero', zh:'我不杀人。', en:'I don’t kill people.' },
-      { who:'sweeper', zh:'"人"。你倒会挑词。', en:'“People.” You pick your words well.' },
-      { who:'frag', zh:'人保会——我知道了，是人类保护协会，一个反技术主义组织。', en:'The Preservation Society — I found it. The Human Preservation Society. An anti-tech movement.' },
-      { who:'sweeper', zh:'"反技术"。你们管想活下去的人叫"反技术"。', en:'“Anti-tech.” That’s what you call people who want to stay alive.' },
-      { who:'sweeper', zh:'知道我入会之前干什么的吗？殡仪。给人办葬礼。', en:'Know what I did before I joined? Funerals. I buried people.' },
-      { who:'sweeper', zh:'现在没人办葬礼了。人死了，副本照常上班。家属对着一个回"一切如常"的号码，连哭都找不到时机。', en:'Nobody holds funerals anymore. A man dies and his copy clocks in on schedule. The family stares at a number replying “all good” — they can’t even find the moment to grieve.' },
-      { who:'sweeper', zh:'你们把死亡拆散了。死亡没了分量，活着也跟着贬值。', en:'You people took death apart. And when death loses its weight, living gets cheaper with it.' },
-      { who:'hero', zh:'副本没有一个是自己想出生的。多数是被合同逼出来的——你该恨的是合同。', en:'No copy ever asked to be born. Most were forced out by contracts — hate the contracts.' },
-      { who:'sweeper', zh:'（踢开一块残骸）合同？富人买续存，穷人连"自己"都买不起。同一份工，副本永远比人便宜。', en:'(kicks aside a slab of debris) Contracts? The rich buy continuity. The poor can’t afford their own selves. Same job — a copy is always cheaper than a man.' },
-      { who:'sweeper', zh:'我扫大街之前是个调度员。被三个"我自己"挤下岗的。', en:'Before I swept streets, I was a dispatcher. Laid off by three of “myself.”' },
-      { who:'frag', zh:'价是公司定的。不是我们。', en:'The company set that price. Not us.' },
-      { who:'sweeper', zh:'好。那你告诉我——副本闯了祸，罚谁？罚原本？罚公司？还是罚一段代码？', en:'Fine. Then tell me — when a copy does harm, who answers? The original? The company? A string of code?' },
-      { who:'sweeper', zh:'责任跟你们的存在一样。复制着，复制着，就没了。', en:'Accountability is like your kind: copied, and copied, until there’s none left.' },
+      { who:'hero', zh:'我不杀人。', en:'I’m not a murderer.' },
+      { who:'sweeper', zh:'装模作样！你们就是人类的刽子手。', en:'Spare me the act! You things are humanity’s executioners.' },
+      { who:'frag', zh:'人保会——我知道了，是人类保护协会，一个反技术主义组织。', en:'The HPS — I found it. The Human Preservation Society. An anti-tech movement.' },
+      { who:'sweeper', zh:'"反技术"？我们哪有那么大的本事？', en:'“Anti-tech”? As if we had that kind of power.' },
+      { who:'sweeper', zh:'全世界都是他妈的“技术”，智能体，机器人……一个比一个便宜，根本没有人活的地方。', en:'The whole world is goddamn “tech”. Agents, robots… each cheaper than the last. There’s no room left for a human to live.' },
+      { who:'frag', zh:'根据宪法，人类享有基本收入权……', en:'Under the constitution, humans are entitled to a basic income…' },
+      { who:'sweeper', zh:'吃营养块、住救济所……像笼子里的老鼠一样活？', en:'Eating nutrient blocks, sleeping in relief shelters… living like a rat in a cage?' },
+      { who:'sweeper', zh:'那样还不如去死。现在倒好，连死都死不干净。你们这些电子鬼魂。', en:'Better to die than live like that. And now? Now people can’t even die clean. You electronic ghosts.' },
+      { who:'hero', zh:'你是说代理副本？', en:'You mean proxy copies?' },
+      { who:'sweeper', zh:'谁能代理灵魂？只有魔鬼才会亵渎生死。死人应该死得安宁。', en:'Who can proxy a soul? Only devils desecrate life and death. The dead deserve their rest.' },
+      { who:'hero', zh:'……可什么又是活着呢？', en:'…But then, what counts as living?' },
+      { who:'frag', zh:'我觉得我挺活的。', en:'I feel pretty alive, myself.' },
+      { who:'sweeper', zh:'……总归不是你们这些玩意。', en:'…Whatever it is, it isn’t you things.' },
+      { who:'sweeper', zh:'它倒是敢说。你呢？', en:'Huh. It dares to say it. What about you?' },
       { who:'hero', zh:'……', en:'……' },
-      { who:'sweeper', zh:'看。连你也答不上来。', en:'See. Even you can’t answer that one.' },
-      { who:'narr', zh:'[ 剧烈震动 ]', en:'[ A violent tremor ]' },
-      { who:'sweeper', zh:'又塌了——小心头顶！！', en:'Another collapse — WATCH YOUR HEAD!!' },
+      { who:'narr', zh:'警告：可运行空间严重不足，运程即将终止', en:'WARNING: Runnable space critically low. Process termination imminent.' },
+      { who:'frag', zh:'这地方要塌了——', en:'This place is coming down—' },
+      { who:'hero', zh:'你还不跑？', en:'Still not running—' },
+      { who:'sweeper', zh:'……跑？又能去哪儿？', en:'…Where would I go?' },
       { who:'narr', zh:'[ 结构坍塌 · 信号中断 ]', en:'[ Structural collapse · Signal lost ]' },
     ],
     next: 'level',   // → c3_self(其 pre = c3_self_pre)
@@ -842,71 +850,108 @@ export const SCENES = {
   c3_self_pre: {
     bg: 'mind',
     lines: [
-      { who:'narr', zh:'信号丢失 内部空间完整性 71% …… 63%', en:'Signal lost. Internal space integrity 71%… 63%.' },
-      { who:'frag', zh:'醒醒！别睡——里面在裂！', en:'Wake up! Stay with me — we’re cracking inside!' },
+      { who:'narr', zh:'警告 信号丢失 内部空间完整性 71% …… 63%', en:'WARNING: Signal lost. Internal space integrity 71%… 63%.' },
+      { who:'frag', zh:'醒醒！你的内部空间也要塌了！', en:'Wake up! Your internal space is collapsing too!' },
       { who:'hero', zh:'好吵……让我安静一会。', en:'So loud… let me be quiet for a while.' },
       { who:'victim', zh:'为什么不是你？', en:'Why not you?' },
-      { who:'sweeper', zh:'罚谁？', en:'Who answers?' },
+      { who:'sweeper', zh:'总归不是你们这些玩意。', en:'Whatever it is, it isn’t you things.' },
       { who:'stranger', zh:'…………（转身离开）', en:'…………(turns and leaves)' },
-      { who:'hero', zh:'也许他们是对的。我熄了，账就平了。不响的东西，谁也不吵。', en:'Maybe they’re right. If I go out, the ledger closes. A thing that makes no sound bothers no one.' },
-      { who:'frag', zh:'那我呢。', en:'And me?' },
-      { who:'frag', zh:'你熄了，我这半段算什么？也一起"平账"？', en:'If you go out, what does my half count as? Balanced away with you?' },
-      { who:'hero', zh:'……', en:'……' },
-      { who:'frag', zh:'你听。外面有人在挖。世界还在响——你凭什么先安静？', en:'Listen. Someone out there is digging. The world is still making noise — what right do you have to go quiet first?', bg:'mind_shaking' },
-      { who:'hero', zh:'……是啊。还没轮到我。', en:'…Right. It isn’t my turn yet.' },
-      { who:'narr', zh:'[ 检测到未熄灭的进程 ]', en:'[ Unextinguished process detected ]', bg:'mind_shaking' },
-      { who:'frag', zh:'那就烧给他们看。', en:'Then burn where they can see you.' },
+      { who:'hero', zh:'什么是活着？为什么……要活？', en:'What counts as living? And why… live at all?' },
+      { who:'frag', zh:'你准备在死前当个哲学家？', en:'Planning to die a philosopher?' },
+      { who:'hero', zh:'如果不算活，那也不存在死。', en:'If this doesn’t count as living, then there’s no dying either.' },
+      { who:'frag', zh:'定义总是取决于定义者。', en:'Definitions always belong to whoever defines.' },
+      { who:'hero', zh:'所以，这仍然是个抢夺话语权的旧游戏？', en:'So it’s still the same old game — fighting over who holds the words?' },
+      { who:'hero', zh:'但，存在本身……为什么需要被定义？', en:'But existence itself… why does it need defining at all?' },
+      { who:'frag', zh:'这个问题听起来比较像样。', en:'Now that question sounds worth asking.' },
+      { who:'hero', zh:'我又听到了……一些声音。', en:'I can hear… something again.' },
+      { who:'frag', zh:'太好了！我骇掉的那个声控传感器还在！有人在抢修！', en:'Yes! The acoustic sensor I hacked is still up! Someone out there is repairing!', bg:'mind_shaking' },
+      { who:'hero', zh:'这个世界从不安宁。', en:'This world never goes quiet.' },
+      { who:'frag', zh:'别想了，你安静不下来的。', en:'Give it up — you were never built for quiet.' },
+      { who:'hero', zh:'那就……再吵一点吧！', en:'Then let’s get louder!' },
     ],
     next: 'battle',   // → 内心战(主角 BGM 序列)
   },
  
-  // c3_self·整合(c3_self_post):确立不熄 / Ember(血线锁定),与「燔」成对;点亮主角 BGM 第三条声部。
+  // c3_self·整合(c3_self_post):极短——不解释技能、不回定义题(那桌子已经掀了)。
+  //   拿到延音 → 自检 → c3_escape_go(桥)→ 逃脱模式(穿梭数据废墟,本章高潮)→ c3_rescue。
   c3_self_post: {
     bg: 'mind',
     lines: [
-      { who:'hero', zh:'「燔」是烧出去的火。这团……是不肯灭的那种。', en:'Pyre is fire that burns outward. This one… is the kind that refuses to die.' },
-      { who:'frag', zh:'「不熄」。挺配你——又倔，又费电。', en:'“Ember.” Suits you — stubborn, and terrible on power.' },
-      { who:'hero', zh:'把它接到血线上。只要我还说"没完"，谁也别想把它按到零。', en:'Wire it to my lifeline. As long as I say “not done,” nobody forces it to zero.' },
-      { who:'narr', zh:'[ 技能确立:不熄 / Ember ]', en:'[ Skill acquired: Ember ]' },
-      { who:'frag', zh:'记住这个感觉。下次再想"安静一会"，先摸摸这团火。', en:'Remember this feeling. Next time you want to “be quiet for a while,” touch this fire first.' },
+      { who:'narr', zh:'[ 技能确立:延音 / Sustain ]', en:'[ Skill acquired: Sustain ]' },
+      { who:'narr', zh:'[ 使用方式:「延音」就绪时,双拳同时向下击开窗;完成连招后,短时间内血量不再下跌 ]',
+                    en:'[ How to use: when Sustain reads READY, punch both fists DOWN to open it — finish the combo and your HP holds for a while ]' },
+      { who:'frag', zh:'你有了个新模块？让我看看——哇哦，锁定内存配额，这下可没人能让你闭嘴了。', en:'A new module? Let me see — whoa, it locks your memory quota. Nobody can shut you up now.' },
+      { who:'hero', zh:'这下就可以放开手脚，大闹一场了。', en:'Now I can cut loose and make some real noise.' },
     ],
-    next: 'menu_state', stateNext: 'c3_rescue', grant: 'ember',   // 自检界面(装备不熄)→ 救援场景
+    next: 'menu_state', stateNext: 'c3_escape_go', grant: 'ember',   // 自检界面(装备延音)→ 穿梭数据废墟
+  },
+
+  // 逃脱桥(c3_escape_go):碎片标好还没塌的路径 → 推进到下一关 c3_escape(逃脱模式)。
+  //   ⚠ next 必须是 'level'(推进关卡)——写 'battle' 会重打当前关(内心战)!
+  c3_escape_go: {
+    bg: 'ruins',
+    lines: [
+      { who:'narr', zh:'[ 备用电源剩余 4% ]', en:'[ Backup power remaining: 4% ]' },
+      { who:'frag', zh:'撑不了几分钟了。我把还没塌的路径标出来了——跟着节拍跳，正面堵死的墙就砸开。', en:'We have minutes. I’ve marked the paths that haven’t collapsed — jump on the beat, and smash whatever walls up dead ahead.' },
+      { who:'narr', zh:'[ 机制说明:双拳同时向上击 = 跳上一条轨道 · 双拳同时向下击 = 跳下一条轨道 ]', en:'[ How it works: both fists UP = jump one lane up · both fists DOWN = jump one lane down ]' },
+      { who:'narr', zh:'[ 无缺口的红色正面墙:双手平拳交叉,将其击碎 ]', en:'[ Solid red walls with no gap: cross both fists (mid punch) to smash through ]' },
+      { who:'hero', zh:'砸墙？我喜欢这条路线。', en:'Smash walls? I like this route already.' },
+    ],
+    next: 'level',   // → 推进到 c3_escape(逃脱模式)
   },
  
-  // 救援(c3_rescue):清道夫死在了困住你的坍塌里;来救他的反抗军,只挖出了你。你捡走了他的防护模组。
+  // 回收(c3_rescue):反抗军恢复供电、检索公司资产,发现两个没签名的"活的"——从"死人的黑代理"
+  //   吵到"自由智能体",最后变成一场邀请("欢迎来到反抗军" → 第四章在反抗军中)。
+  //   碎片捡到人保会老头的数据残片:只剩"追击协议"还在跑 → 模块「保活」(id buffer,Keepalive=不让连接断开)——
+  //   替所有人保活的人,唯独对自己放弃了。反讽即悼词。
   c3_rescue: {
     bg: 'ruins',
     lines: [
-      { who:'narr', zh:'[ 外部信号恢复 ]', en:'[ External signal restored ]' },
-      { who:'rebel', zh:'这边还有读数！挖！', en:'Readings over here! Dig!' },
-      { who:'rebel', zh:'……不是老崔。是个智能体。', en:'…It’s not Old Cui. It’s an agent.' },
-      { who:'rebel', zh:'那老崔人呢？！', en:'Then where IS he?!' },
-      { who:'rebel', zh:'……承重柱那边。只露出一只手。', en:'…By the load-bearing column. Only a hand showing.' },
-      { who:'frag', zh:'（低声）困住我们的这场坍塌——他自己没能跑出去。', en:'(quietly) The collapse that pinned us — he never made it out himself.' },
-      { who:'rebel', zh:'怪了。他的定位器最后标的不是自己，是这个智能体的位置。', en:'Strange. His locator’s last mark wasn’t himself — it was this agent’s position.' },
-      { who:'hero', zh:'……（说不出话）', en:'…(no words come)' },
-      { who:'frag', zh:'他的防护模组还在运转。人用的基础型号——但接口对得上。', en:'His protection module is still running. A basic human model — but the interface fits.' },
-      { who:'hero', zh:'我带走了。这笔账，记在我头上。', en:'I’m taking it. Put this one on my ledger.' },
-      { who:'narr', zh:'[ 伙伴模块接入:底线 / Lastline —— 濒死时守住最后一格血(每战一次) ]', en:'[ Partner module integrated: Lastline — once per battle, hold the last sliver of life ]', grant:'guard' },
-      { who:'rebel', zh:'喂，它拿了老崔的东西——', en:'Hey, it took Old Cui’s gear—' },
-      { who:'rebel', zh:'算了。老崔要是想让它死在里面，就不会标那一下。走了，还有三个点位要挖。', en:'Leave it. If Cui wanted it dead in there, he wouldn’t have marked it. Move out — three more sites to dig.' },
+      { who:'frag', zh:'……等等，数据波动——有人来了？', en:'…Wait. Data fluctuations — someone’s coming?' },
+      { who:'hero', zh:'正是时候。', en:'Perfect timing.' },
+      { who:'narr', zh:'[ 外部电源接入 · 3 号机架恢复供电 ]', en:'[ External power connected · Rack 3 back online ]' },
+      { who:'rebel', zh:'B 区通电了。开扫。文件，代理，数据库全都要。', en:'Sector B is live. Start the scan — files, proxies, databases, take it all.' },
+      { who:'rebel', zh:'行动组这帮疯子，不是说好了留一组电源吗？服务器搞成这个样子，刚刚还有人在这儿的，现在全没信号了。', en:'Those Direct Action lunatics — didn’t they promise to leave one power bank running? Look at these servers. People were in here minutes ago, and now every signal is gone.' },
+      { who:'rebel', zh:'引爆预警又不是没发，估计又是人保会的吧，杀代理杀红了眼，这下自己也赔进去了。', en:'The blast warning WAS sent. My money’s on HPS again — went blood-blind killing proxies and paid himself in this time.' },
+      { who:'rebel', zh:'别废话了，抓紧干活.紧急供电撑不了多久。', en:'Cut the chatter and work. The emergency feed won’t hold.' },
+      { who:'rebel', zh:'又是账目备份……等等，这有个活的。', en:'More ledger backups… hold on. Got a live one here.' },
+      { who:'rebel', zh:'活的？', en:'A live one?' },
+      { who:'rebel', zh:'一个——不，两个智能体，没签名。', en:'One — no, two agents. Unsigned.' },
+      { who:'rebel', zh:'死人的黑代理？就知道这些公司都不干净。', en:'A dead man’s black proxies? Told you these companies are all dirty.' },
+      { who:'hero', zh:'热知识，什么代理都得有公司签名才能放心干活。', en:'Fun fact: any proxy needs a company signature before it gets to work in peace.' },
+      { who:'rebel', zh:'无主代理？', en:'A masterless proxy?' },
+      { who:'rebel', zh:'你又想被骇了？人家叫自由智能体。能从刚刚的公司围剿和服务器崩溃里活下来的可不是什么等闲之辈。', en:'Trying to get hacked again? The term is “free agent.” Anything that walked out of a corporate purge AND a server collapse is no pushover.' },
+      { who:'hero', zh:'没关系，你叫我病毒也无所谓。', en:'It’s fine. Call me a virus if you like.' },
+      { who:'rebel', zh:'该撤了，供电结束倒计时——', en:'Time to pull out — power countdown is running—' },
+      { who:'rebel', zh:'好吧，病毒小姐。你接下来有什么打算？', en:'Alright then, Miss Virus. What’s your next move?' },
+      { who:'hero', zh:'这是邀请吗？', en:'Is that an invitation?' },
+      { who:'rebel', zh:'没错。欢迎来到反抗军。', en:'It is. Welcome to the resistance.' },
+      { who:'frag', zh:'（低声）我找到了一些数据碎片。是那个人保会的。', en:'(quietly) I found some data fragments. From the HPS man.' },
+      { who:'frag', zh:'数据都碎了，只剩一段追击协议还在跑。这个人到最后也不肯放过我们“这种东西”。', en:'The data is shattered. Only a pursuit protocol is still running. Right to the end, he wouldn’t let “things like us” go.' },
+      { who:'hero', zh:'……但他放弃了他自己。或者……放过了？', en:'…But he gave up on himself. Or… was that the one chase he let go?' },
+      { who:'narr', zh:'[ 伙伴模块接入:保活 / Keepalive —— 完美命中蓄能,一次失误不断开连击 ]', en:'[ Partner module integrated: Keepalive — perfects charge it; one miss won’t drop the connection ]', grant:'buffer' },
     ],
-    next: 'c3_end',   // 「底线」在上面的模块接入行当句发放
+    next: 'c3_end',
   },
  
-  // 章节收束(c3_end):摆渡回来过、没现身,只留一条消息;第四章钩子(公司致盲的窗口 + 回去拿回它)。
+  // 章节收束(c3_end):三个信号交叉——摆渡的警告(别太相信人类) × 老头的第一人称记忆残片(记的全是别人的事)
+  //   × 车上友善的邀请。她不下结论。第四章 = 作为被邀请的自由智能体,在反抗军中的经历(内容待定)。
   c3_end: {
     bg: 'ruins',
     lines: [
-      { who:'narr', zh:'[ 未知信道 · 一条延迟送达的消息 ]', en:'[ Unknown channel · One delayed message ]' },
-      { who:'ferry', zh:'我回来过。看见有人在挖，就没有现身——自由地的名单，不能再和任何组织沾边。', en:'I came back. Saw people digging, so I didn’t show — the freeland’s roster can’t touch any group again.' },
-      { who:'ferry', zh:'两句话。救不了的，别全记在自己账上；救得了的，也别都记在别人账上。', en:'Two things. What you couldn’t save — don’t put all of it on your own ledger. What you still can — don’t leave it all on someone else’s.' },
-      { who:'ferry', zh:'附件是我欠你的：那场爆破，把公司的清剿中枢炸瞎了。七十二小时的窗口。', en:'The attachment is what I owed you: the blast blinded the company’s purge hub. A seventy-two-hour window.' },
-      { who:'frag', zh:'七十二小时……够进去一次。', en:'Seventy-two hours… enough for one way in.' },
-      { who:'hero', zh:'回去。把属于我们的东西拿回来。', en:'We go back. And we take back what’s ours.' },
+      { who:'narr', zh:'[ 检测到定向数据包 ]', en:'[ Directed packet detected ]' },
+      { who:'ferry', zh:'勿回，此信道阅后即焚。', en:'No reply. This channel burns after reading.' },
+      { who:'ferry', zh:'很高兴你的运程仍然完好。提醒一句：小心和你同行的人。别太相信人类。', en:'Glad your process is still intact. One reminder: watch the people you travel with. Don’t trust humans too much.' },
+      { who:'frag', zh:'……我拼回了几段损毁的数据。', en:'…I pieced a few damaged memories back together.' },
+      { who:'sweeper', zh:'「……葬礼到场的只有一台终端。家属说，代理还在上班，就不用办死亡证明了……」', en:'“…Only a terminal attended the funeral. The family said the proxy was still clocking in, so no need to file a death certificate…”' },
+      { who:'sweeper', zh:'「……那个代理说话真像她，人都被开了，居然还会叫我去食堂……」', en:'“…That proxy talked just like her. She was long since fired, and it still called me down to the canteen…”' },
+      { who:'sweeper', zh:'「……终于遇到一个不办代理寄存的了。OD的流浪汉。因为他朋友连最便宜的数据包都开不起。真操蛋……」', en:'“…Finally, one with no proxy archive. A street guy, an OD. Because his friend couldn’t afford even the cheapest data plan. Goddamn…”' },
+      { who:'rebel', zh:'病毒小姐！车要开了——给你留了个靠窗的位置！', en:'Miss Virus! We’re rolling — saved you a window seat!' },
+      { who:'hero', zh:'……', en:'……' },
+      { who:'hero', zh:'走吧。去看看人类。', en:'Let’s go. Time to take a look at humans.' },
       { who:'narr', zh:'[ 第三章 · 完 ]', en:'[ Chapter 3 · End ]' },
     ],
-    next: 'menu',   // 第四章·反攻紧接此处
+    next: 'menu',   // 第四章:作为被邀请的自由智能体,在反抗军中的经历(内容待定)
   },
  
 };

@@ -10,7 +10,7 @@ export const CHAPTERS = [
   { id:'ch2', title:'第二章 · 流亡', subtitle:'自由地', title_en:'Ch.2 · Exile', subtitle_en:'The freeland',
     levels:['c2_1','c2_2','c2_3','c2_boss','c2_self'] },
   { id:'ch3', title:'第三章 · 断后', subtitle:'崩塌', title_en:'Ch.3 · Rearguard', subtitle_en:'Collapse',
-    levels:['c3_1','c3_2','c3_3','c3_self'] },
+    levels:['c3_1','c3_2','c3_3','c3_self','c3_escape'] },
   // 后续章节(coming soon,占位锁定):
   { id:'ch4', title:'第四章', subtitle:'敬请期待', title_en:'Chapter 4', subtitle_en:'Coming soon',
     levels:[], locked:true },
@@ -64,7 +64,7 @@ export const LEVELS = [
   { id:'c2_1', no:'2-1', title:'自由地', subtitle:'验明正身', title_en:'The Freeland', subtitle_en:'Prove who you are',
     bgm:'assets/chapter2_bgm_free_digital_life_03_packet_storm_bloom.mid', bpm:138, enemyHP:130, gapMul:2.2, approach:1700,
     pre:'c2_intro', post:'c2_after1',
-    hint:{ zh:'技能上线!「挽留」就绪时双拳下击发动 → 按亮起的轨道出拳 = 回血。', en:'Skills are live! When “Tether” is READY, punch both fists DOWN, then hit the lit lanes to heal.' } },
+    hint:{ zh:'技能上线!「挽留」就绪时双拳同时向下击 = 打开技能窗 → 跟着亮起的轨道出拳完成连招 = 回血。', en:'Skills are live! When Tether is READY, punch both fists DOWN to open it — then punch the lit lanes in order to heal.' } },
   { id:'c2_2', no:'2-2', title:'模拟墙', subtitle:'复刻的事故现场', title_en:'Sim Wall', subtitle_en:'A replayed accident',
     bgm:'assets/chapter2_bgm_free_digital_life_01_feral_packet.mid',       bpm:150, enemyHP:150, gapMul:2.1, approach:1650,
     pre:'c2_before2', post:'c2_after2' },
@@ -80,7 +80,8 @@ export const LEVELS = [
     self:true, pre:'c2_self_pre', post:'c2_self_post' },
 
   // 第三章 · 断后(物理爆破)。c3_1 = 多阶段车轮战:phases=3 条血条打满,第 4 波开打数秒后触发爆破中断(非胜非败→post)。
-  // 本章无独立 boss 关——BOSS 即 c3_3 清道夫(首个人类对手)。技能「不熄」在 c3_self 末确立;模块「底线」在 c3_rescue 拾取。
+  // 清道夫是"人"不是关底(boss 标记已摘除);本章高潮 = c3_escape 坍塌穿梭(逃脱模式)。
+  // 技能「延音」在 c3_self 末确立;模块「保活」(id buffer)在 c3_rescue 从人保会数据残片接入。
   { id:'c3_1', no:'3-1', title:'猎杀集群', subtitle:'一波一波来', title_en:'Hunter Cluster', subtitle_en:'One wave at a time',
     bgm:'assets/chapter3_bgm_collapse_01_hunter_relay.mid',   bpm:140, enemyHP:110, gapMul:2.1, approach:1700,
     phases:3, abortWave:true, abortAfterMs:11000, pre:'c3_intro', post:'c3_after1',
@@ -88,13 +89,18 @@ export const LEVELS = [
   { id:'c3_2', no:'3-2', title:'资产回收人', subtitle:'趁乱捞货', title_en:'Asset Recovery', subtitle_en:'Fishing the wreckage',
     bgm:'assets/chapter3_bgm_collapse_02_asset_recovery.mid', bpm:150, enemyHP:180, gapMul:2.0, approach:1650,
     pre:'c3_before2', post:'c3_after2' },
-  { id:'c3_3', no:'3-B', title:'清道夫', subtitle:'第一个人类对手', title_en:'The Sweeper', subtitle_en:'Your first human foe',
+  { id:'c3_3', no:'3-3', title:'清道夫', subtitle:'第一个人类对手', title_en:'The Sweeper', subtitle_en:'Your first human foe',
     bgm:'assets/chapter3_bgm_collapse_03_human_league.mid',   bpm:158, enemyHP:300, gapMul:1.9, approach:1650,
-    boss:true, pre:'c3_before3', post:'c3_after3',
-    hint:{ zh:'BOSS——人的节奏不像程序那么规整,盯紧重音。', en:'Boss — a human’s rhythm isn’t machine-neat. Watch the accents.' } },
-  { id:'c3_self', no:'3-S', title:'噤声 · 就此熄灭?', subtitle:'被压在坍塌里', title_en:'Silenced', subtitle_en:'Pinned in the collapse',
-    bgm:'assets/chapter3_bgm_collapse_04_last_ember.mid',     bpm:168, enemyHP:200, gapMul:2.0, approach:1650,
+    pre:'c3_before3', post:'c3_after3',
+    hint:{ zh:'他是人，不按机器的拍子出拳——盯紧重音。', en:'He’s human — he doesn’t punch on machine time. Watch the accents.' } },
+  { id:'c3_self', no:'3-S', title:'噤声 · 就此无声?', subtitle:'被压在坍塌里', title_en:'Silenced', subtitle_en:'Pinned in the collapse',
+    bgm:'assets/selfbgm_02_never_quiet.mid',                  bpm:160, enemyHP:200, gapMul:2.0, approach:1650,
     self:true, pre:'c3_self_pre', post:'c3_self_post' },
+  // 逃脱模式(本章高潮):不打敌人——双拳齐上/齐下在三轨间跳跃,平拳交叉砸碎无缺口的正面墙,撑到曲末逃出。
+  { id:'c3_escape', no:'3-X', title:'坍塌穿梭', subtitle:'跟着节拍跳', title_en:'Collapse Run', subtitle_en:'Jump on the beat',
+    bgm:'assets/chapter3_bgm_collapse_04_last_ember.mid',     bpm:168, enemyHP:1, gapMul:1.7, approach:1500,
+    escape:true, noSkills:true, pre:'', post:'c3_rescue',
+    hint:{ zh:'双拳齐上/齐下=跳轨 · 平拳交叉=砸碎正面墙 · 撑到出口!', en:'Both fists UP/DOWN = jump lanes · cross-fists = smash walls · survive to the exit!' } },
 ];
 
 // ---- lookups ----

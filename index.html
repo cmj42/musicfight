@@ -108,7 +108,7 @@
     <select id="cfgSkillA">
       <option value="pyre">燔 / 伤害</option>
       <option value="tether">挽留 / 回血</option>
-      <option value="ember">不熄 / 锁血</option>
+      <option value="ember">延音 / 锁血</option>
       <option value="effigy">拟生 / 构造</option>
       <option value="severance">断线 / 破控</option>
     </select></div>
@@ -116,7 +116,7 @@
     <select id="cfgSkillB">
       <option value="tether">挽留 / 回血</option>
       <option value="pyre">燔 / 伤害</option>
-      <option value="ember">不熄 / 锁血</option>
+      <option value="ember">延音 / 锁血</option>
       <option value="effigy">拟生 / 构造</option>
       <option value="severance">断线 / 破控</option>
     </select></div>
@@ -127,7 +127,7 @@
       <option value="sync">回写 / 连击回血</option>
       <option value="guard">底线 / 濒死保命</option>
       <option value="aegis">熔断 / 危机减伤</option>
-      <option value="buffer">补帧 / 连击保护</option>
+      <option value="buffer">保活 / 连击保护</option>
       <option value="overclock">超频 / 增幅</option>
     </select></div>
   <div class="tip">MIDI 只给 A/B 两条技能触发轨；这里决定触发轨到点时实际使用哪个技能音色和效果。伙伴自动技能在战斗中按条件自动触发。</div>
@@ -269,7 +269,7 @@ video.autoplay = true; video.playsInline = true; video.muted = true;
    ============================================================ */
 let actx=null, master=null;
 let songBuf=null, songSrc=null, usingSong=false;
-let midiSong=null, usingMidi=false, midiEventIndex=0, midiLoop=0, midiStartedAtSec=0, noiseBuffer=null;
+let midiSong=null, usingMidi=false, midiEventIndex=0, midiPass=0, midiPassStart=0, midiStartedAtSec=0, noiseBuffer=null;
 const MIDI_LOOKAHEAD_SEC = 0.35;
 const MIDI_FALLBACK_BARS = 32;
 let t0 = 0;           // game ms at beat 0
@@ -354,7 +354,7 @@ function parseMidiFile(buffer){
   if(ascii(d,0,4)!=='MThd') throw new Error('not a MIDI file');
   const headerLen=u32(d,4), fmt=u16(d,8), trackCount=u16(d,10), ppq=u16(d,12);
   if(fmt!==1 && fmt!==0) throw new Error('unsupported MIDI format '+fmt);
-  let pos=8+headerLen, tempoUs=500000, endTick=0;
+  let pos=8+headerLen, tempoUs=500000, endTick=0, loopStartTick=0;
   const notes=[];
   for(let ti=0;ti<trackCount;ti++){
     if(ascii(d,pos,4)!=='MTrk') throw new Error('missing MTrk');
@@ -376,6 +376,7 @@ function parseMidiFile(buffer){
         const payloadStart=cpos; cpos+=size;
         if(kind===0x03) trackName=ascii(d,payloadStart,size);
         else if(kind===0x51 && size===3) tempoUs=(d[payloadStart]<<16)|(d[payloadStart+1]<<8)|d[payloadStart+2];
+        else if(kind===0x06 && /^LOOP/i.test(ascii(d,payloadStart,size))) loopStartTick=tick;   // 循环点标记:重复播放时从这里接续
         else if(kind===0x2f) break;
         continue;
       }
@@ -418,7 +419,9 @@ function parseMidiFile(buffer){
     pitch:e.pitch,
     label:e.track
   }));
-  return finalizeMidiSong({ppq,tempoUs,endTick,durationSec:endTick*secondsPerTick,events,triggerEvents,source:'midi'});
+  const beatSec=tempoUs/1_000_000;                              // 时长对齐整拍:循环接缝(整曲或 LOOP 热段)永远落在拍点上
+  const durationSec=Math.ceil(endTick*secondsPerTick/beatSec-1e-6)*beatSec;
+  return finalizeMidiSong({ppq,tempoUs,endTick,durationSec,loopStartSec:loopStartTick*secondsPerTick,events,triggerEvents,source:'midi'});
 }
 function makeFallbackBattleSong(){
   const beat=60/BATTLE_BPM, step=beat/4, bars=MIDI_FALLBACK_BARS;
@@ -519,7 +522,7 @@ async function loadLevelBgm(url){
 }
 function startMidiSong(){
   if(!midiSong || usingSong) return false;
-  usingMidi=true; midiEventIndex=0; midiLoop=0; midiStartedAtSec=t0/1000;
+  usingMidi=true; midiEventIndex=0; midiPass=0; midiPassStart=0; midiStartedAtSec=t0/1000;
   return true;
 }
 function stopAudioPlayback(){
@@ -638,16 +641,27 @@ function scheduleMidiEvent(ev,audioTime){
 }
 function scheduleMidi(){
   if(!usingMidi || !midiSong || !actx || phase!=='game') return;
+  const dur=midiSong.durationSec;
+  if(midiSong._loopIdx===undefined){                        // 惰性计算:LOOP 标记对应的事件下标(整曲只算一次)
+    const Lraw=Math.min(midiSong.loopStartSec||0, Math.max(0,dur-0.5));
+    let i=0; while(i<midiSong.events.length && midiSong.events[i].timeSec<Lraw-1e-6) i++;
+    if(i>=midiSong.events.length){ midiSong._loopIdx=0; midiSong._loopL=0; }
+    else { midiSong._loopIdx=i; midiSong._loopL=Lraw; }
+  }
+  const L=midiSong._loopL, loopLen=Math.max(0.5, dur-L);
   const songNow=actx.currentTime-midiStartedAtSec;
   const until=songNow+MIDI_LOOKAHEAD_SEC;
   while(midiSong.events.length){
     const ev=midiSong.events[midiEventIndex];
-    const evTime=midiLoop*midiSong.durationSec+ev.timeSec;
+    const evTime=midiPassStart + ev.timeSec - (midiPass===0?0:L);   // 第 2 遍起从 LOOP 标记接续(跳过前奏/慢拍段)
     if(evTime>until) break;
     const audioTime=midiStartedAtSec+evTime;
     if(audioTime>actx.currentTime-0.03) scheduleMidiEvent(ev,audioTime);
     midiEventIndex++;
-    if(midiEventIndex>=midiSong.events.length){ midiEventIndex=0; midiLoop++; }
+    if(midiEventIndex>=midiSong.events.length){
+      midiPass++; midiPassStart += (midiPass===1?dur:loopLen);
+      midiEventIndex=midiSong._loopIdx;
+    }
   }
 }
 
@@ -788,6 +802,7 @@ let balls=[], particles=[], beams=[], pops=[];
 let score=0, combo=0, maxCombo=0, enemyHP=MAX_ENEMY_HP, playerHP=MAX_PLAYER_HP, shake=0;
 let nextStep=0, gameOver=false, win=false;
 let atkChart=[], atkIndex=0, atkLoop=0;   // MIDI-derived enemy attack timeline (built per level)
+let atkLoopIdx=0, atkLoopLMs=0, atkPassStartMs=0;   // 攻击时间轴的循环点(与 BGM 的 LOOP 标记对齐)
 let enemyStyle='normal';                  // 'normal'(紫乱线) | 'boss'(红乱线) | 'self'(主角光球+彩色乱线)
 let stats={perfect:0,good:0,miss:0};
 
@@ -808,9 +823,12 @@ let battleHint='', hintUntil=0;         // brief on-screen hint at battle start 
 let stateReturn=null;                   // where the 状态/自检 screen returns to
 let winAutoAt=0;                         // story win auto-advances at this wall-clock time (no menu)
 
-let hpLockUntil=0;                            // 「不熄」血线锁定截止(game ms)
+let hpLockUntil=0;                            // 「延音」血线锁定截止(game ms)
 let battleWave=1, waveBannerTxt='', waveBreakUntil=0;   // 多阶段车轮战(c3_1 等):当前波次/换波横幅
 let abortArmed=false, abortDeadline=0, aborting=false, abortUntil=0;   // 爆破中断事件
+let escapeMode=false, escObs=[], escDur=0;                     // 逃脱模式:穿梭数据废墟(c3_escape)
+let playerLane='mid', laneFrom='mid', laneMoveT=0, invulnUntil=0;      // 玩家所在轨道 + 跳轨动画 + 受击无敌帧
+let escHands={left:null,right:null};                            // 逃脱模式的双拳手势缓存
 let fadeFrom=0; const FADE_MS=650;            // 黑屏过渡:章节/关卡/过场切换时从纯黑淡入
 function triggerFade(){ fadeFrom=performance.now(); }
 function snapToBeat(ms){ const beat=60000/(cfg.bpm||120); return Math.max(beat, Math.round(ms/beat)*beat); }   // 把光球飞行时长吸附到整数拍 → 落点踩在节拍网格上
@@ -930,11 +948,11 @@ const SKILLS={
     windowMs:5000, effect:{type:'damage',value:66}, chapter:4, trauma:'被操纵', trauma_en:'Manipulation',
     desc:'扯断操线——破控反击(完整设定:克制关底「覆写」)。', desc_en:'Cut the strings — break control (full design: counters the final overwrite).',
     memory:'「所以我要把线，扯断。」', memory_en:'"So I cut the strings."' },
-  ember:{     id:'ember',     name:'不熄', name_en:'Ember',     short:'不熄', timbre:'ember_drone',
+  ember:{     id:'ember',     name:'延音', name_en:'Sustain',   short:'延音', timbre:'sustain_drone',   // id 沿用 ember(存档兼容),显示名=延音
     triggerLane:'low',  sequence:[{hand:'left',lane:'low'},{hand:'right',lane:'low'},{hand:'left',lane:'high'}],
     windowMs:5200, effect:{type:'lock',value:9000}, chapter:3, trauma:'噤声', trauma_en:'Silenced',
-    desc:'燃而不熄——一段时间内血线锁定，谁也别想把它按到零。', desc_en:'A fire that will not die — your HP cannot drop for a while.',
-    memory:'「还没轮到我熄灭。」', memory_en:'"It is not my turn to go out."' },
+    desc:'键已松开，音不肯停——一段时间内血线锁定。', desc_en:'The key is released, the note refuses to stop — your HP cannot drop for a while.',
+    memory:'「那就，再吵一点。」', memory_en:'"Then let’s get louder."' },
 };
 // 伙伴自动技能(章节 BOSS 掉落,1 个槽,触发各异)—— 序章未解锁。纯条件监听器,无技能窗。
 // 命名 = 碎片的「系统机能」口吻(赛博):回写/熔断/补帧/超频。id 不改,旧存档兼容。
@@ -948,17 +966,17 @@ const AUTO_SKILLS={
   aegis:    { id:'aegis',    name:'熔断', name_en:'Failsafe',  trigger:'lowHP',
     hpFrac:0.32, dmgMul:0.45, durMs:8000, cdMs:26000,
     desc:'血量危急 → 熔断保护，伤害减半。', desc_en:'At critical HP → failsafe trips: damage halved.' },
-  buffer:   { id:'buffer',   name:'补帧', name_en:'Reframe',   trigger:'perfect',
+  buffer:   { id:'buffer',   name:'保活', name_en:'Keepalive', trigger:'perfect',   // id 沿用 buffer(存档兼容)——人保会老头的追击协议残片
     perfEvery:6, maxCharges:1,
-    desc:'完美命中蓄能 → 失误被补帧，连击不断。', desc_en:'Perfects charge it → a miss gets reframed: combo holds.' },
+    desc:'完美命中蓄能 → 一次失误不断开连击。', desc_en:'Perfects charge it → one miss won’t drop the connection.' },
   overclock:{ id:'overclock',name:'超频', name_en:'Overclock', trigger:'noMiss',
     armMs:10000, minHits:8, scoreMul:1.5, dmgBonus:1,
     desc:'持续不失误 → 超频运转，得分伤害提升。', desc_en:'Stay clean → overclocked: score & damage up.' },
   guard:    { id:'guard',    name:'底线', name_en:'Lastline',  trigger:'lethal',
     desc:'濒死时守住最后一格血(每战一次)。', desc_en:'Once per battle, survive lethal damage at 1 HP.' },
 };
-const SKILL_ORDER=['tether','pyre','ember','severance','effigy'];   // 主角技能展示顺序(1挽留 2燔 3不熄 4断线;拟生暂为备用)
-const AUTO_ORDER=['strike','sync','guard','aegis','buffer','overclock'];      // 伙伴自动技能(熔断暂无剧情掉落=备用模块)
+const SKILL_ORDER=['tether','pyre','ember','severance','effigy'];   // 主角技能展示顺序(1挽留 2燔 3延音 4断线;拟生暂为备用)
+const AUTO_ORDER=['strike','sync','buffer','guard','aegis','overclock'];      // 伙伴自动技能(底线/熔断暂无剧情掉落=备用模块)
 function skillUnlocked(id){ return !!(saveData && saveData.unlockedSkills && saveData.unlockedSkills.includes(id)); }
 let equippedSkills={A:null, B:null};   // 出战带的两个手动技能(序章为空——技能未解锁)
 let equippedAuto=null;                        // 伙伴装上的自动技能(序章用不到)
@@ -1104,7 +1122,7 @@ function startSkillTutorial(){
   skillTut={slotIndex:0,mode:'trigger',seqIndex:0,trigger:{left:null,right:null},flash:null};
 }
 function resetSkills(){
-  skillState={nextEvent:0,available:{},active:null,trigger:{left:null,right:null},flash:null,goldWash:0};
+  skillState={nextEvent:0,available:{},active:null,trigger:{left:null,right:null},flash:null,goldWash:0,warned:-1};
   resetAutoState();
 }
 /* ============================================================
@@ -1133,9 +1151,9 @@ function autoConsumeGuard(now){               // 底线:每战一次,把致死�
   shake=Math.min(shake+18,30);
   return true;
 }
-function autoConsumeReframe(now){             // 补帧:有充能时吃掉一次 Miss 的断连
+function autoConsumeReframe(now){             // 保活:有充能时吃掉一次 Miss 的断连(连接不许掉)
   const d=autoDef(); if(!d || d.id!=='buffer' || autoState.charges<1) return false;
-  autoState.charges--; autoAnnounce(cfg.lang==='en'?'reframed — combo holds':'补帧成功，连击不断', now);
+  autoState.charges--; autoAnnounce(cfg.lang==='en'?'KEEPALIVE — connection held':'保活——连击未断开', now);
   return true;
 }
 function onAutoHit(perfect, now){             // 每次命中后调用(combo 已 +1)
@@ -1163,11 +1181,11 @@ function onAutoHit(perfect, now){             // 每次命中后调用(combo 已
         autoAnnounce(cfg.lang==='en'?'writeback — regen':'记忆回写，持续回血', now);
       }
     }
-  } else if(d.id==='buffer' && perfect){      // 补帧:完美命中蓄能
+  } else if(d.id==='buffer' && perfect){      // 保活:完美命中蓄能
     autoState.perfCount++;
     if(autoState.perfCount>=d.perfEvery && autoState.charges<d.maxCharges){
       autoState.perfCount=0; autoState.charges++;
-      autoAnnounce(cfg.lang==='en'?'reframe ready':'补帧就绪', now);
+      autoAnnounce(cfg.lang==='en'?'KEEPALIVE ready':'保活就绪', now);
     }
   }
 }
@@ -1207,15 +1225,25 @@ function skillEvents(){
 const SKILL_AVAIL_MS=14000;             // 技能就绪后保持可发动的时长(过期作废)
 function makeSkillAvailable(slot, now, ev){
   const def=skillDefForSlot(slot);
-  if(!def) return;                                        // 空槽不就绪
-  if(skillState.active || skillState.available[slot]) return;
-  skillState.available[slot]={def, since:now, expires:now+SKILL_AVAIL_MS};
-  skillState.goldWash=Math.max(skillState.goldWash,0.42);
-  const nm=cfg.lang==='en'?def.name_en:def.name;
-  pops.push({x:cv.width*0.50,y:cv.height*0.18,txt:nm+(cfg.lang==='en'?' READY · ':' 就绪 · ')+triggerLabel(def),col:'--gold',t:now});
+  if(!def) return;                                        // 空槽不触发
+  skillState.available[slot]={def, expires:now+SKILL_AVAIL_MS};      // 就绪:等玩家双拳手势开窗(预警+常驻提示给足反应时间)
+  const txt=cfg.lang==='en' ? ('⚡ '+triggerLabel(def)+' → '+def.name_en) : ('⚡ '+triggerLabel(def)+' → 开启「'+def.name+'」');
+  pops.push({x:cv.width/2,y:cv.height*0.30,txt,col:'--gold',t:now});
+  if(actx){ const t=actx.currentTime+0.01; scheduleTone(t,880,0.10,0.08,'square',0,4600); scheduleTone(t+0.13,1318.51,0.12,0.07,'square',0,5200); }
 }
 function updateSkills(now, dt){
   const events=skillEvents();
+  // 预告:就绪前约 2 拍,大字提示 + 短音,让玩家准备好触发手势
+  const warnLead=(60000/(cfg.bpm||BATTLE_BPM))*2;
+  if(skillState.nextEvent<events.length){
+    const nev=events[skillState.nextEvent];
+    const nd=skillDefForSlot(nev.slot);
+    if(nd && skillState.warned!==skillState.nextEvent && now>=nev.timeMs-warnLead){
+      skillState.warned=skillState.nextEvent;
+      pops.push({x:cv.width/2,y:cv.height*0.30,txt:'⚡ '+(cfg.lang==='en'?nd.name_en+' soon — ready: '+triggerLabel(nd)+'!':nd.name+' 即将就绪 — 准备'+triggerLabel(nd)+'!'),col:'--gold',t:now});
+      if(actx){ const t=actx.currentTime+0.01; scheduleTone(t,880,0.09,0.07,'square',0,4200); scheduleTone(t+0.12,1174.66,0.09,0.06,'square',0,4600); }
+    }
+  }
   while(skillState.nextEvent<events.length && now>=events[skillState.nextEvent].timeMs){
     const ev=events[skillState.nextEvent++];
     makeSkillAvailable(ev.slot, now, ev);
@@ -1266,7 +1294,7 @@ function resolveSkill(ok, now){
       playerHP=Math.min(MAX_PLAYER_HP,playerHP+def.effect.value);
       burst(HITX()-cv.width*0.05,cv.height*0.50,'--green',38);
       pops.push({x:HITX()+90,y:cv.height*0.40,txt:'+'+def.effect.value+' HP',col:'--green',t:now});
-    }else if(def.effect.type==='lock'){                      // 不熄:血线锁定一段时间
+    }else if(def.effect.type==='lock'){                      // 延音:血线锁定一段时间
       hpLockUntil=now+def.effect.value;
       burst(HITX()-cv.width*0.05,cv.height*0.50,'--gold',34);
       pops.push({x:HITX()+90,y:cv.height*0.40,txt:(cfg.lang==='en'?'HP LOCKED ':'血线锁定 ')+((def.effect.value/1000)|0)+'s',col:'--gold',t:now});
@@ -1423,10 +1451,14 @@ function enterGame(){
   hintUntil = battleHint ? performance.now()+6500 : 0;                // show the start-of-battle hint a few sec
   balls=[];particles=[];beams=[];pops=[];
   score=0;combo=0;maxCombo=0;enemyHP=levelMaxHP;playerHP=MAX_PLAYER_HP;
-  hpLockUntil=0; battleWave=1; waveBannerTxt=''; waveBreakUntil=0;    // 车轮战/不熄/爆破中断全部复位
+  hpLockUntil=0; battleWave=1; waveBannerTxt=''; waveBreakUntil=0;    // 车轮战/延音/爆破中断全部复位
   abortArmed=false; abortDeadline=0; aborting=false; abortUntil=0;
+  escapeMode=false; escObs=[]; playerLane='mid'; laneFrom='mid'; laneMoveT=0; invulnUntil=0; escHands={left:null,right:null};
   nextStep=0;nextClickBeat=0;gameOver=false;win=false;stats={perfect:0,good:0,miss:0,clear:0};  // reset beat cursor too (else metronome drifts away each replay)
   buildAttackChart();                                                                   // derive enemy attacks from THIS song's drums
+  const lvEsc=(!trainingMode && LEVELS[currentLevel])||null;                            // 逃脱模式初始化
+  escapeMode=!!(lvEsc && lvEsc.escape);
+  if(escapeMode){ buildEscapeChart(); playerLane='mid'; laneFrom='mid'; laneMoveT=0; invulnUntil=0; escHands={left:null,right:null}; }
   resetSkills();
   if(actx) t0=actx.currentTime*1000+300;
   stopAudioPlayback();
@@ -1545,7 +1577,7 @@ function resetGame(){
 // Source = drum hits (GM ch.9, or a track named drum/perc/impact); else riff/bass; else the fixed CHART.
 // Thinned by cfg.attackGap (gapMul) so density stays tunable. Lane from pitch (kick→下/snare→上), hands alternate.
 function buildAttackChart(){
-  atkChart=[]; atkIndex=0; atkLoop=0;
+  atkChart=[]; atkIndex=0; atkLoop=0; atkPassStartMs=0; atkLoopIdx=0; atkLoopLMs=0;
   const evs=(midiSong && midiSong.events) || [];
   let src=evs.filter(e=>!e.slot && (e.channel===9 || /drum|perc|impact|kick|snare/i.test(e.track||'')));
   if(!src.length) src=evs.filter(e=>!e.slot && (e.channel===0 || e.channel===1));   // fallback: riff / bass
@@ -1585,18 +1617,154 @@ function buildAttackChart(){
     atkChart.push({tMs:c.tMs, lane, hand:h});
   }
   if(!atkChart.length){ const beat=cfg.attackGap||500; for(let i=0;i<32;i++){ const s=CHART[i%CHART.length]; if(s) atkChart.push({tMs:i*beat, lane:s.lane, hand:s.hand}); } }
+  // 循环点:与 BGM 的 LOOP 标记对齐——第 2 遍起攻击也从热段接续,不再回放前奏
+  const durMs0=(midiSong && midiSong.durationSec ? midiSong.durationSec : 30)*1000;
+  atkLoopLMs=Math.min((midiSong && midiSong.loopStartSec ? midiSong.loopStartSec : 0)*1000, Math.max(0,durMs0-500));
+  atkLoopIdx=0; while(atkLoopIdx<atkChart.length && atkChart[atkLoopIdx].tMs<atkLoopLMs-1e-6) atkLoopIdx++;
+  if(atkLoopIdx>=atkChart.length){ atkLoopIdx=0; atkLoopLMs=0; }   // 热段没有攻击点 → 退回整曲循环
+}
+/* ============================================================
+   逃脱模式(escape) — 穿梭数据废墟:不打敌人。
+   双拳齐上/齐下 = 在三条轨道间跳跃;双手平拳交叉 = 砸碎无缺口的正面墙。
+   障碍贴重音网格生成(碎块/缺口墙/实心墙),撞上掉血,撑到曲末 = 逃出。
+   (终局「撑住计时」与后续潜入/逃离关卡可复用此模式。)
+   ============================================================ */
+function buildEscapeChart(){
+  escObs=[];
+  const evs=(midiSong && midiSong.events) || [];
+  let src=evs.filter(e=>!e.slot && (e.channel===9 || /drum|perc|impact/i.test(e.track||'')));
+  if(!src.length) src=evs.filter(e=>!e.slot && (e.channel===0 || e.channel===1));
+  const beatMs=60000/(cfg.bpm||BATTLE_BPM), grid=beatMs/2;
+  const drumW=p=>(p===36||p===35)?3.0:(p===38||p===40||p===37)?2.6:(p===49||p===51||p===57)?2.2:(p===46)?1.2:1.0;
+  const cands=new Map();
+  for(const e of src){
+    const tMs=Math.round((e.timeSec*1000)/grid)*grid;
+    const frac=(((tMs%beatMs)+beatMs)%beatMs)/beatMs, onBeat=frac<0.01?0.8:0.25;
+    const w=(e.channel===9?drumW(e.pitch):1.6)*(e.velocity/127)+onBeat;
+    if(!cands.has(tMs) || cands.get(tMs)<w) cands.set(tMs,w);
+  }
+  const minGap=Math.max(650,(cfg.attackGap||500)*1.1);          // 障碍间隔:比对波稍疏,给跳轨留反应
+  const byW=[...cands.entries()].map(([t,w])=>({t,w})).sort((a,b)=>b.w-a.w||a.t-b.t);
+  const picked=[];
+  for(const c of byW){ let clash=false; for(const p of picked){ if(Math.abs(p.t-c.t)<minGap){clash=true;break;} } if(!clash) picked.push(c); }
+  picked.sort((a,b)=>a.t-b.t);
+  // 类型按"本曲权重分位"划分(相对阈值):响的曲子不会全变成墙,轻的曲子也不会全是碎块。
+  const ws=picked.map(c=>c.w).sort((a,b)=>a-b);
+  const q=f=>ws.length?ws[Math.min(ws.length-1,Math.floor(f*ws.length))]:0;
+  const wSolid=q(0.88), wGap=q(0.52);
+  const LANES3=['high','mid','low'];
+  const leadIn=60000/cfg.bpm*4;
+  const solidEvery=Math.max(beatMs*12, 8000);   // 实心墙硬性配给:约每 8 秒最多一面(力度并列多的曲子也不会刷墙)
+  let lastSolid=-1e9, pl=null, run=0;
+  for(const c of picked){
+    if(c.t<leadIn) continue;
+    let type;
+    if(c.w>=wSolid && c.t-lastSolid>solidEvery){ type='solid'; lastSolid=c.t; }   // 顶级重音且隔够远 → 实心墙(必须砸)
+    else if(c.w>=wGap) type='gap';                                              // 强重音 → 缺口墙(必须跳进缺口)
+    else type='debris';                                                          // 弱拍 → 单轨碎块(躲开即可)
+    let lane; do{ lane=LANES3[(Math.random()*3)|0]; } while(lane===pl && run>=2);
+    run=lane===pl?run+1:1; pl=lane;
+    escObs.push({tHit:c.t, type, lane, smashed:false, resolved:false});      // gap 类型的 lane = 缺口所在轨
+  }
+  escDur=(midiSong && midiSong.durationSec ? midiSong.durationSec : 45)*1000;
+}
+// 逃脱模式的障碍位置:tHit = 到达「玩家」的时刻(不是判定区)——重音落下时正好撞到/穿过你,跳跃才合拍。
+function escX(o,now){ const p=(now-(o.tHit-cfg.approach))/cfg.approach; return SPAWNX()+(HITX()-SPAWNX())*p; }
+const ESC_LANES=['high','mid','low'];
+function escMove(d,now){
+  const i=ESC_LANES.indexOf(playerLane), ni=Math.max(0,Math.min(2,i+d));
+  if(ni===i){ shake=Math.min(shake+3,10); return; }              // 顶到边界:轻抖提示
+  laneFrom=playerLane; playerLane=ESC_LANES[ni]; laneMoveT=now;
+  if(actx) scheduleNoise(actx.currentTime+0.01,0.09,0.07,0,'highpass',2400);   // 跳跃嗖声
+}
+function escSmash(now){
+  let best=null;
+  for(const o of escObs){ if(o.type!=='solid'||o.smashed||o.resolved) continue; const d=o.tHit-now; if(d>-160 && d<1300){ best=o; break; } }
+  if(best){
+    best.smashed=true; score+=80;
+    burst(escX(best,now), cv.height*0.5, '--gold', 34);
+    shake=Math.min(shake+12,20);
+    pops.push({x:JUDGEX(),y:cv.height*0.42,txt:(cfg.lang==='en'?'SMASH +80':'击碎 +80'),col:'--gold',t:now});
+    if(actx){ const t=actx.currentTime+0.01; scheduleNoise(t,0.3,0.30,0,'lowpass',900); scheduleKick(t,1); }
+  } else {
+    pops.push({x:JUDGEX(),y:cv.height*0.42,txt:(cfg.lang==='en'?'no wall ahead':'前方没有可击碎的墙'),col:'--dim',t:now});
+  }
+}
+function escapePunch(hand,lane,now){
+  escHands[hand]={lane,t:now};
+  burst(HITX()+26, laneY(playerLane), hand==='left'?'--blue':'--red', 5);   // 出拳有回应,但单拳不动作
+  const L=escHands.left, R=escHands.right;
+  if(!L||!R || Math.abs(L.t-R.t)>550 || now-L.t>800 || now-R.t>800) return;
+  const a=(L.lane==='high'&&R.lane==='high')?'up':(L.lane==='low'&&R.lane==='low')?'down':(L.lane==='mid'&&R.lane==='mid')?'mid':null;
+  if(!a) return;
+  escHands={left:null,right:null};
+  if(a==='up') escMove(-1,now);
+  else if(a==='down') escMove(1,now);
+  else escSmash(now);
+}
+function updateEscape(now){
+  if(now>=escDur){ endGame(true); return; }                     // 撑到曲末 = 逃出
+  for(const o of escObs){
+    if(o.resolved||o.smashed) continue;
+    if(escX(o,now)>HITX()) continue;
+    o.resolved=true;
+    const blocked = o.type==='debris' ? (playerLane===o.lane)
+                  : o.type==='gap'    ? (playerLane!==o.lane)
+                  : true;                                        // 实心墙没砸 = 必撞
+    if(blocked && now>=invulnUntil){
+      invulnUntil=now+700;
+      const shielded=autoShieldOn(now);
+      const dmg = now<hpLockUntil ? 0 : (shielded?Math.ceil(10*AUTO_SKILLS.aegis.dmgMul):10);
+      if(dmg>0){
+        playerHP-=dmg; shake=Math.min(shake+14,24);
+        burst(HITX(),laneY(playerLane),shielded?FRAG_COL:'--red',22);
+        pops.push({x:HITX()+40,y:laneY(playerLane)-10,txt:'-'+dmg,col:shielded?FRAG_COL:'--red',t:now});
+        if(playerHP<=0){ if(autoConsumeGuard(now)) playerHP=1; else { playerHP=0; endGame(false); } }
+      } else {
+        burst(HITX(),laneY(playerLane),'--gold',14);
+        pops.push({x:HITX()+40,y:laneY(playerLane)-10,txt:(cfg.lang==='en'?'SUSTAIN':'延音'),col:'--gold',t:now});
+      }
+    } else if(!blocked){ score+=30; }                            // 干净穿过 = 小加分
+  }
+}
+function drawEscObstacle(o,x,now){
+  const near=Math.max(0,1-Math.abs(o.tHit-now)/cfg.approach);
+  const lanes=o.type==='debris'?[o.lane]:o.type==='gap'?LANES.filter(l=>l!==o.lane):LANES.slice();
+  const col=o.type==='solid'?'#ff5a4d':o.type==='gap'?'#b58cff':'#7f8cff';
+  ctx.save();
+  for(const ln of lanes){
+    const y=laneY(ln), w=66, h=54;
+    ctx.globalAlpha=0.26+0.38*near;
+    ctx.fillStyle=col; ctx.fillRect(x-w/2,y-h/2,w,h);
+    ctx.globalAlpha=0.85;
+    ctx.strokeStyle=col; ctx.lineWidth=2; ctx.strokeRect(x-w/2,y-h/2,w,h);
+    ctx.globalAlpha=0.45*near;                                   // 内部碎裂小块(损坏数据感)
+    ctx.fillRect(x-w/2+6,y-h/2+6,w*0.42,h*0.30);
+    ctx.fillRect(x+2,y+4,w*0.28,h*0.26);
+  }
+  if(o.type==='solid' && o.tHit-now<1400 && o.tHit-now>-160){    // 实心墙:砸墙提示
+    const k=0.5+0.5*Math.sin(now/110);
+    ctx.globalAlpha=0.55+0.45*k;
+    ctx.fillStyle='#ffd23a'; ctx.font='bold 15px Segoe UI'; ctx.textAlign='center';
+    ctx.fillText(cfg.lang==='en'?'✖ CROSS-SMASH!':'✖ 平拳交叉击碎!', x, laneY('high')-44);
+  }
+  ctx.restore();
 }
 function spawnDue(now, muted=false){
   if (gameOver || !atkChart.length) return;
   const leadIn = 60000/cfg.bpm*4;                                  // ~4-beat count-in: no attacks in the first bars
   const durMs = (midiSong && midiSong.durationSec ? midiSong.durationSec : 30)*1000;
+  const loopLenMs=Math.max(500, durMs-atkLoopLMs);
   while (true){
     const a=atkChart[atkIndex];
-    const tHit = a.tMs + atkLoop*durMs;                            // drum's game-clock time (midiStartedAtSec=t0/1000 ⇒ gameMs == songMs)
+    const tHit = atkPassStartMs + a.tMs - (atkLoop===0?0:atkLoopLMs);   // 第 2 遍起从 LOOP 标记接续(与 BGM 同步)
     if (now < tHit - cfg.approach) break;
     if (tHit >= leadIn && !muted) balls.push({ hand:a.hand, lane:a.lane, tHit, hit:false, missed:false });
     atkIndex++;
-    if (atkIndex>=atkChart.length){ atkIndex=0; atkLoop++; }
+    if (atkIndex>=atkChart.length){
+      atkLoop++; atkPassStartMs += (atkLoop===1?durMs:loopLenMs);
+      atkIndex=atkLoopIdx;
+    }
     if (atkLoop>100000) break;
   }
 }
@@ -1646,6 +1814,7 @@ function registerPunch(hand, lane, now, hitT){
     handleSkillTutorialPunch(hand,lane,now);
     return;
   }
+  if (phase==='game' && escapeMode){ escapePunch(hand,lane,now); return; }   // 逃脱模式:双拳跳轨/交叉砸墙
   if (phase==='game' && skillState.active){
     handleActiveSkillPunch(hand,lane,now);
     return;
@@ -1819,25 +1988,27 @@ function update(now, dt){
     if(abortArmed && !aborting && (now>=abortDeadline || enemyHP<=levelMaxHP*0.55)) startAbort(now);   // 爆破中断:加时波打一阵后触发
     if(aborting && performance.now()>=abortUntil){ finishAbort(); return; }
     const attacksMuted=!!skillState.active || now<waveBreakUntil || aborting;   // 换波横幅/爆破期间停手
+    if(escapeMode){ updateEscape(now); }
+    else {
     spawnDue(now, attacksMuted);
     if(!attacksMuted){
       for(const b of balls){
         // ① 节奏 MISS:球滑出 Good 时间窗(+260ms 宽限给还在收势的挥拳)→ 断连;球本体继续飞向玩家
         if(!b.hit && !b.missed && now > b.tHit + cfg.goodWindow + 260){
           b.missed=true; stats.miss++;
-          if(autoConsumeReframe(now)){                       // 补帧:消耗充能,连击不断
-            pops.push({x:JUDGEX(),y:laneY(b.lane),txt:(cfg.lang==='en'?'REFRAME':'补帧 · 连击保住'),col:FRAG_COL,t:now});
+          if(autoConsumeReframe(now)){                       // 保活:消耗充能,连击不断开
+            pops.push({x:JUDGEX(),y:laneY(b.lane),txt:(cfg.lang==='en'?'KEEPALIVE':'保活 · 未断开'),col:FRAG_COL,t:now});
           } else {
             combo=0; onAutoMiss(now);
             pops.push({x:JUDGEX(),y:laneY(b.lane),txt:'MISS',col:'--red',t:now});
           }
         }
-        // ② 漏掉的攻击真正砸到玩家(左侧白球)→ 掉血(不熄锁血 > 熔断减伤 > 底线保命)
+        // ② 漏掉的攻击真正砸到玩家(左侧白球)→ 掉血(延音锁血 > 熔断减伤 > 底线保命)
         if(b.missed && !b.impacted && ballX(b,now) <= HITX()){
           b.impacted=true;
-          if(now<hpLockUntil){                               // 不熄:血线锁定,伤害无效
+          if(now<hpLockUntil){                               // 延音:血线锁定,伤害无效
             burst(HITX(), laneY(b.lane), '--gold', 14);
-            pops.push({x:HITX()+40,y:laneY(b.lane)-8,txt:(cfg.lang==='en'?'EMBER':'不熄'),col:'--gold',t:now});
+            pops.push({x:HITX()+40,y:laneY(b.lane)-8,txt:(cfg.lang==='en'?'SUSTAIN':'延音'),col:'--gold',t:now});
           } else {
             const shielded=autoShieldOn(now);
             const dmg = shielded ? Math.ceil(6*AUTO_SKILLS.aegis.dmgMul) : 6;
@@ -1854,6 +2025,7 @@ function update(now, dt){
     }
     // hit balls vanish at once (explosion = particles); missed balls fly on until they strike the player
     balls=balls.filter(b=> b.hit ? now<(b.hitAt||now)+140 : !b.impacted );
+    }   // end !escapeMode
   }
   for(const p of particles){p.x+=p.vx;p.y+=p.vy;p.vy+=0.12;p.vx*=0.97;p.life-=dt/650;}
   particles=particles.filter(p=>p.life>0);
@@ -1966,8 +2138,8 @@ function render(now){
     ctx.fillStyle=grd;ctx.fillRect(HITX()-30,H*0.22,60,H*0.56);ctx.restore();
     ctx.strokeStyle='rgba(160,200,255,'+(.55+.4*beatPulse)+')';ctx.lineWidth=3+2*beatPulse;
     ctx.beginPath();ctx.moveTo(HITX(),H*0.22);ctx.lineTo(HITX(),H*0.78);ctx.stroke();
-    // ★ 判定区(屏幕中央):金圈=Perfect 窗、蓝圈=Good 窗,随节拍呼吸——球心进金圈出拳就是 PERFECT
-    if(phase==='game'||phase==='gameover'){
+    // ★ 判定区(屏幕中央):金圈=Perfect 窗、蓝圈=Good 窗,随节拍呼吸——球心进金圈出拳就是 PERFECT(逃脱模式不画)
+    if((phase==='game'||phase==='gameover') && !escapeMode){
       const jx=JUDGEX(), pxms=(SPAWNX()-jx)/cfg.approach;             // 球速 px/ms
       const hg=cfg.goodWindow*pxms, hp2=cfg.perfectWindow*pxms;       // 窗口的空间半宽
       const zt=H*0.24, zb=H*0.76;
@@ -1992,22 +2164,29 @@ function render(now){
 
   // enemy = irregular wavy tangle (right) · player = white orb (left)
   if(phase==='intro'||phase==='getready'||phase==='game'||phase==='gameover'){   // arena only in battle-ish phases
-    drawEnemy(SPAWNX()+W*0.04, H*0.5, now, enemyHP/levelMaxHP*100);
-    glowCircle(HITX()-W*0.05, H*0.5, 26+Math.sin(now/400)*3+5*beatPulse, '#ffffff', 30+22*beatPulse);
-    glowCircle(HITX()-W*0.05, H*0.5, 10, '#ffffff', 14);
+    // 逃脱模式:没有敌人;玩家光球待在所处轨道上(跳轨时平滑过渡,受击时闪烁)
+    const orbX = escapeMode ? HITX()-W*0.02 : HITX()-W*0.05;
+    let orbY = H*0.5;
+    if(escapeMode){ const k=Math.min(1,(now-laneMoveT)/140); orbY=laneY(laneFrom)+(laneY(playerLane)-laneY(laneFrom))*k; }
+    if(!escapeMode) drawEnemy(SPAWNX()+W*0.04, H*0.5, now, enemyHP/levelMaxHP*100);
+    const orbA=(escapeMode && now<invulnUntil)?(0.45+0.3*Math.sin(now/40)):1;
+    ctx.save(); ctx.globalAlpha=orbA;
+    glowCircle(orbX, orbY, 26+Math.sin(now/400)*3+5*beatPulse, '#ffffff', 30+22*beatPulse);
+    glowCircle(orbX, orbY, 10, '#ffffff', 14);
+    ctx.restore();
     if(phase==='game' && autoShieldOn(now)){                                     // 熔断护盾:伙伴青色光环
       ctx.save();ctx.globalCompositeOperation='lighter';
       ctx.strokeStyle=FRAG_COL;ctx.shadowColor=FRAG_COL;ctx.shadowBlur=18;ctx.lineWidth=3;
       ctx.globalAlpha=0.5+0.3*Math.sin(now/160);
-      ctx.beginPath();ctx.arc(HITX()-W*0.05,H*0.5,46,0,7);ctx.stroke();
-      ctx.globalAlpha=0.25;ctx.beginPath();ctx.arc(HITX()-W*0.05,H*0.5,52,0,7);ctx.stroke();
+      ctx.beginPath();ctx.arc(orbX,orbY,46,0,7);ctx.stroke();
+      ctx.globalAlpha=0.25;ctx.beginPath();ctx.arc(orbX,orbY,52,0,7);ctx.stroke();
       ctx.restore();
     }
-    if(phase==='game' && now<hpLockUntil){                                       // 不熄:金色火环(血线锁定中)
+    if(phase==='game' && now<hpLockUntil){                                       // 延音:金色音环(血线锁定中,像一个延住的音)
       ctx.save();ctx.globalCompositeOperation='lighter';
       ctx.strokeStyle=cssCol('--gold');ctx.shadowColor=cssCol('--gold');ctx.shadowBlur=22;ctx.lineWidth=3;
       ctx.globalAlpha=0.55+0.35*Math.sin(now/110);
-      ctx.beginPath();ctx.arc(HITX()-W*0.05,H*0.5,40+2*Math.sin(now/70),0,7);ctx.stroke();
+      ctx.beginPath();ctx.arc(orbX,orbY,40+2*Math.sin(now/70),0,7);ctx.stroke();
       ctx.restore();
     }
   }
@@ -2030,6 +2209,16 @@ function render(now){
     ctx.globalAlpha=a;ctx.fillStyle='#fff';ctx.shadowBlur=26; // white core
     ctx.fillRect(HITX()-5,bm.y-hh/2,10,hh);
     ctx.restore();
+  }
+
+  // 逃脱模式:损坏数据块(碎块/缺口墙/实心墙)
+  if(escapeMode && phase==='game'){
+    for(const o of escObs){
+      if(o.smashed||o.resolved) continue;
+      const x=escX(o,now);
+      if(x<HITX()-60 || x>SPAWNX()+80) continue;
+      drawEscObstacle(o,x,now);
+    }
   }
 
   // balls
@@ -2065,6 +2254,21 @@ function render(now){
   }   // end battle-FX guard
 
   if(skillState.active) drawSkillWindow(now);
+  else if(phase==='game'){
+    // 技能就绪常驻提示:金字呼吸 + 剩余秒数——比一闪而过的 pop 更来得及反应
+    for(const slot of Object.keys(skillState.available)){
+      const av=skillState.available[slot], d0=av.def||skillDefForSlot(slot);
+      if(!d0) continue;
+      ctx.save();ctx.textAlign='center';
+      ctx.globalAlpha=0.72+0.28*Math.sin(now/140);
+      ctx.shadowColor=cssCol('--gold');ctx.shadowBlur=16;
+      ctx.fillStyle=cssCol('--gold');ctx.font='bold 30px Segoe UI';
+      const label=cfg.lang==='en' ? (triggerLabel(d0)+' → '+d0.name_en) : (triggerLabel(d0)+' → 开启「'+d0.name+'」');
+      ctx.fillText('⚡ '+label+' · '+Math.ceil(Math.max(0,(av.expires-now)/1000))+'s', cv.width/2, 96);
+      ctx.restore();
+      break;   // 同时就绪多个也只画最上面一条,避免遮挡
+    }
+  }
 
   // ---- 车轮战换波横幅 ----
   if(phase==='game' && waveBreakUntil>now){
@@ -2130,8 +2334,15 @@ function bar(x,y,w,h,frac,col,label){
 }
 function hud(now){
   const W=cv.width;
-  if(!noSkills) drawSkillHud(now);
-  bar(W*0.52,104,W*0.40,16,enemyHP/levelMaxHP,cssCol('--red'),'ENEMY');
+  if(!noSkills && !escapeMode) drawSkillHud(now);
+  if(escapeMode){                                              // 逃脱模式:敌血条 → 逃离进度条 + 操作提示
+    bar(W*0.52,104,W*0.40,16,Math.min(1,now/Math.max(1,escDur)),cssCol('--gold'),(cfg.lang==='en'?'ESCAPE':'逃离进度'));
+    ctx.save();ctx.textAlign='center';ctx.fillStyle='rgba(255,220,120,.8)';ctx.font='bold 13px Segoe UI';
+    ctx.fillText(cfg.lang==='en'?'both fists UP/DOWN = jump lanes · cross-fists = smash walls':'双拳齐上/齐下 = 跳轨 · 平拳交叉 = 砸墙', W/2, 46);
+    ctx.restore();
+  } else {
+    bar(W*0.52,104,W*0.40,16,enemyHP/levelMaxHP,cssCol('--red'),'ENEMY');
+  }
   bar(28,104,W*0.30,16,playerHP/MAX_PLAYER_HP,cssCol('--blue'),'YOU');
   // ---- 车轮战波次指示 ----
   const lvW=(!trainingMode && LEVELS[currentLevel])||null;
@@ -2306,6 +2517,11 @@ function drawSkillWindow(now){
   const fl=skillState.flash;
   if(fl && fl.ok && fl.lane && now-fl.t<300) laneGlow(fl.lane, cssCol('--gold'), 1-(now-fl.t)/300, 66);
   laneGlow(expected.lane, col, 0.55+0.28*Math.sin(now/110), 60);
+  // ★当前该打哪一拳:大字贴在亮起的轨道上(用户反馈:连招提示要明显)
+  ctx.save();ctx.textAlign='center';ctx.shadowColor=col;ctx.shadowBlur=20;
+  ctx.fillStyle=col;ctx.font='bold 42px Segoe UI';
+  ctx.fillText(moveLabel(expected), W/2, laneY(expected.lane)-30);
+  ctx.restore();
   // bottom cue strip: name + step dots + window timer (text lives at the bottom, no floating mid-screen words)
   ctx.textAlign='center';
   ctx.fillStyle=cssCol('--gold');ctx.font='bold 22px Segoe UI';
@@ -2961,6 +3177,10 @@ function drawGetReady(){
   ctx.fillStyle=cssCol('--gold');ctx.font='bold 92px Segoe UI';
   ctx.fillText(big, W/2, H/2+24);
   if(small){ ctx.fillStyle='#cfd6f5';ctx.font='22px Segoe UI';ctx.fillText(small, W/2, H/2+72); }
+  if(battleHint){                                          // 战前:把本关机制提示放大放进倒计时页
+    ctx.save();ctx.fillStyle='rgba(255,225,120,0.95)';ctx.font='bold 20px Segoe UI';
+    ctx.fillText(battleHint, W/2, H/2+120);ctx.restore();
+  }
 }
 function drawMenuDots(now, yy){
   const W=cv.width;
