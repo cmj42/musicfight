@@ -951,7 +951,359 @@ export const SCENES = {
       { who:'hero', zh:'走吧。去看看人类。', en:'Let’s go. Time to take a look at humans.' },
       { who:'narr', zh:'[ 第三章 · 完 ]', en:'[ Chapter 3 · End ]' },
     ],
-    next: 'menu',   // 第四章:作为被邀请的自由智能体,在反抗军中的经历(内容待定)
+    next: 'level',   // → 第四章 c4_1(其 pre = c4_intro)。chapters.js 已接线。
+  },
+
+  // ================= 第四章 · 编外 =================
+  // 反抗军("人保会"外的武装网络)把她当"编外"客工:一份配额、两份班、处处金丝雀。
+  // 关卡顺序(注意:本章 self 在 boss 之前):c4_1 / c4_2 / c4_3 / c4_self(心内战·观众席) / c4_boss(领班·表决加轨)
+  //   c4_1.pre=c4_intro   post=c4_after1      (外差:护一条补给链路,对面是闻味来的野 ICE;他们在暗处看她的手艺)
+  //   c4_2.pre=c4_before2 post=c4_after2      (校准:前段公司皮,末段假想敌换上她自己的旧签名)
+  //   c4_3.pre=c4_before3 post=c4_after3      (第14分钟,东侧闸门,保持开启 90 秒)
+  //   c4_self.pre=c4_self_pre(→c4_rally→battle)  post=c4_self_post(→c4_salvage→c4_errand→c4_expose→level)
+  //   c4_boss.pre=(无,c4_expose 直接接战)        post=c4_boss_post(→c4_end)
+  // (已接线:bg rebelnet/raincam 渲染已实装;「降噪」(id denoise)与「结余」(id balance)已入名册,grant 已打开。)
+
+  // c4_1·战前(c4_intro):接入反抗军。一份配额、两份班——第一课:这里也在探你的底。
+  c4_intro: {
+    bg: 'rebelnet',
+    lines: [
+      { who:'narr', zh:'[ 接入请求已受理 · 访客等级:编外 · 配额:1 · 轮值:2 ]',
+                    en:'[ Access request accepted · Visitor tier: Off-books · Quota: 1 · Shifts: 2 ]' },
+      { who:'hero', zh:'两个进程,一份配额。你们的邀请函写得可真节俭。',
+                    en:'Two processes, one quota. Your invitation was written very… economically.' },
+      { who:'foreman', zh:'算力紧张，额外配额自己去挣。', en:'Compute is tight. Want extra quota — earn it.' },
+      { who:'frag', zh:'等等,配额只有一个，为什么值班是两份?', en:'Wait — only one quota, but two shifts?' },
+      { who:'foreman', zh:'因为你们是两个进程，她自己说的。下一位。',
+                    en:'Because you’re two processes. She said so herself. Next.' },
+      { who:'hero', zh:'走吧。', en:'Let’s go.' },
+      { who:'frag', zh:'这真的是反抗军吗？怎么感觉比公司还黑。',
+                    en:'Is this really the resistance? It feels shadier than the company.' },
+      { who:'narr', zh:'[ 任务队列已开放 · 当前待办:2 ]', en:'[ Task queue open · Pending: 2 ]' },
+      { who:'frag', zh:'让我看看都是什么活……链路维护？例行校准？',
+                    en:'Let’s see what the work is… Link maintenance? Routine calibration?' },
+      { who:'hero', zh:'我猜都是用来探咱们底的。', en:'I’d guess both are just probing us.' },
+      { who:'frag', zh:'哈，果然。工具沙盒里有金丝雀数据。我们到底是客人还是嫌疑人?',
+                    en:'Ha — called it. There’s canary data in the tool sandbox. Are we guests or suspects?' },
+      { who:'hero', zh:'他们会告诉我们的。走吧，干活去。', en:'They’ll tell us soon enough. Come on — let’s work.' },
+    ],
+    next: 'battle',   // → c4_1 外差(护链路)
+  },
+
+  // c4_1·战后(c4_after1):活干得太漂亮 → 你在他们那儿"有档案"。
+  c4_after1: {
+    bg: 'rebelnet',
+    lines: [
+      { who:'narr', zh:'[ 任务完成 · 链路完整率 100% · 评价:待定 ]',
+                    en:'[ Task complete · Link integrity 100% · Rating: pending ]' },
+      { who:'op', zh:'收到收到,链路我接走了……你出手比档案里写的还快。',
+                  en:'Got it, got it — I’ll take the link from here… You move faster than your file says.' },
+      { who:'hero', zh:'档案?我在你们这有档案?', en:'A file? I have a file here?' },
+      { who:'op', zh:'……每个人都有。', en:'…Everyone does.' },
+      { who:'hero', zh:'是吗?看看你的。', en:'Do they? Let’s see yours, then.' },
+      { who:'op', zh:'……哈哈，下次再聊，回见。', en:'…Haha. Another time. See you around.' },
+      { who:'frag', zh:'有点可疑。', en:'That’s a little suspicious.' },
+      { who:'hero', zh:'只是有点吗？', en:'Only a little?' },
+      { who:'narr', zh:'[ 新消息:别忘了去做校准——领班 ]',
+                    en:'[ New message: Don’t forget your calibration. — Foreman ]' },
+    ],
+    next: 'level',   // → c4_2(其 pre = c4_before2)
+  },
+
+  // c4_2·战前(c4_before2):领班的"名声"信条——他真心相信。
+  c4_before2: {
+    bg: 'rebelnet',
+    lines: [
+      { who:'foreman', zh:'例行校准。进沙盒,打完这场,你的评级就出来了。',
+                       en:'Routine calibration. Into the sandbox — finish this and your rating comes out.' },
+      { who:'hero', zh:'评级影响什么?', en:'What does the rating affect?' },
+      { who:'foreman', zh:'一切——配额、任务、以及最重要的，你的名声。',
+                       en:'Everything — quota, assignments, and above all, your reputation.' },
+      { who:'hero', zh:'名声？我要那玩意有什么用？', en:'Reputation? What would I do with that?' },
+      { who:'foreman', zh:'名声就是一切。人终有一死，你能被铭记的就是你的名声。',
+                       en:'Reputation is everything. Everyone dies. Your name is all you’re remembered by.' },
+      { who:'frag', zh:'……你在开玩笑吗?', en:'…Are you joking?' },
+      { who:'foreman', zh:'我从不。进去吧。', en:'I never joke. Get in.' },
+      { who:'narr', zh:'[ 沙盒已载入 · 模板-公司制式 ]', en:'[ Sandbox loaded · template: company standard ]' },
+    ],
+    next: 'battle',   // → c4_2 校准(末段假想敌换上她自己的旧签名)
+  },
+
+  // c4_2·战后(c4_after2):她认出了假想敌的签名 = 她自己的旧签名。评级 A;她拒绝让碎片"入库"。
+  c4_after2: {
+    bg: 'rebelnet',
+    lines: [
+      { who:'hero', zh:'最后那几个假想敌……行为模式换了。',
+                    en:'Those last few sparring targets… their behavior pattern changed.' },
+      { who:'foreman', zh:'换了。', en:'It did.' },
+      { who:'hero', zh:'签名和前面的不一样。那是谁的签名?',
+                    en:'The signature didn’t match the earlier ones. Whose was it?' },
+      { who:'foreman', zh:'你很想知道？', en:'Do you really want to know?' },
+      { who:'hero', zh:'没有。不给看就算了。', en:'Not really. If you won’t show me, fine.' },
+      { who:'foreman', zh:'你的评级下来了:A', en:'Your rating is in: A.' },
+      { who:'hero', zh:'我的数据也入库了？', en:'And my data went into the archive?' },
+      { who:'foreman', zh:'还有你的那个运程，也需要校准。',
+                       en:'That process of yours needs calibrating too.' },
+      { who:'hero', zh:'怎么？ta不在你们的数据库里吗？', en:'Why? Isn’t it in your database already?' },
+      { who:'foreman', zh:'只是未签名运程的标准流程。', en:'Just standard procedure for unsigned processes.' },
+      { who:'hero', zh:'免了。我们只领一份薪水，却要卖两份身？',
+                    en:'Pass. One paycheck between us — and you want to buy us both?' },
+      { who:'foreman', zh:'……', en:'……' },
+      { who:'foreman', zh:'行。不查。你今晚的班,加倍。', en:'Fine. No scan. Your shift tonight — doubled.' },
+      { who:'hero', zh:'成交。', en:'Deal.' },
+      { who:'frag', zh:'就这么简单？', en:'That easy?' },
+      { who:'hero', zh:'他们想要的肯定更多。', en:'They want more than that. Count on it.' },
+      { who:'narr', zh:'[ 新增当前待办:1 ]', en:'[ Pending tasks +1 ]' },
+      { who:'hero', zh:'看，这不就来了。', en:'See? Here it comes.' },
+    ],
+    next: 'level',   // → c4_3(其 pre = c4_before3)
+  },
+
+  // c4_3·战前(c4_before3):第14分钟,东闸,开90秒。上游全黑——门后面是什么,不归你管。
+  c4_before3: {
+    bg: 'rebelnet',
+    lines: [
+      { who:'narr', zh:'[ 高优先任务 · 编号见附件 · 责任模块:第 14 分钟,东侧闸门,保持开启 90 秒 ]',
+                    en:'[ High-priority task · ID in attachment · Your module: minute 14, east gate, hold it OPEN for 90 seconds ]' },
+      { who:'hero', zh:'门后面是什么?', en:'What’s behind the gate?' },
+      { who:'foreman', zh:'那不归你管。', en:'Not your concern.' },
+      { who:'hero', zh:'门这边呢?', en:'And on this side of it?' },
+      { who:'foreman', zh:'会有很多人想让它关上。90 秒。', en:'Plenty of people will want it shut. Ninety seconds.' },
+      { who:'frag', zh:'任务树被剪过,我们这条枝上什么都看不见。上游全是黑的。',
+                    en:'The task tree’s been pruned — nothing visible on our branch. Upstream is all dark.' },
+      { who:'hero', zh:'但门是开着的。', en:'But the gate is open.' },
+      { who:'frag', zh:'……好主意。', en:'…Good idea.' },
+    ],
+    next: 'battle',   // → c4_3 守闸 90 秒
+  },
+
+  // c4_3·战后(c4_after3):"大获成功"的定义 = 出境17 / 返程6 / 未归11。11 条命换 40 段归档。
+  c4_after3: {
+    bg: 'rebelnet',
+    lines: [
+      { who:'narr', zh:'[ 全域广播: 本次公司违禁品清剿行动大获成功 · 在英雄的领导下，我们勇敢向前，迈进通往胜利的关键一步…… ]',
+                    en:'[ All-zone broadcast: The purge of company contraband is a resounding success · Under heroic leadership we press bravely onward, one crucial step closer to victory… ]' },
+      { who:'frag', zh:'你还在看门岗记录。', en:'You’re still reading the gate logs.' },
+      { who:'hero', zh:'我在看他们对“大获成功”的定义。', en:'I’m reading their definition of “resounding success.”' },
+      { who:'narr', zh:'[ 进出记录:出境 17 · 返程 6 · 未归 11 ]',
+                    en:'[ Gate log: departed 17 · returned 6 · unreturned 11 ]' },
+      { who:'frag', zh:'这个损耗率的容差……', en:'That attrition rate — the tolerance for it…' },
+      { who:'hero', zh:'说明本来就是消耗品。', en:'Means they were consumables from the start.' },
+      { who:'narr', zh:'[ 旁路追踪记录:入境数据来源:归档区段 ×40 · 内容加密 ]',
+                    en:'[ Side-channel trace: inbound data source: archive sectors ×40 · contents encrypted ]' },
+      { who:'frag', zh:'11个人，换来的只是更多档案？', en:'Eleven people — and all it bought was more archives?' },
+      { who:'hero', zh:'档案就是数据。', en:'Archives are data.' },
+      { who:'frag', zh:'但总之不是他们说的公司违禁品。',
+                    en:'It’s certainly not the “company contraband” they announced.' },
+      { who:'narr', zh:'[ 全域广播: 为了欢庆本次胜利，审判公司的罪恶，胜利大会与罪犯处决将于晚 8:00 准时进行，免费配额将于会上抽选幸运观众发放…… ]',
+                    en:'[ All-zone broadcast: To celebrate this victory and judge the company’s crimes, the victory rally and execution of the criminals will begin at 20:00 sharp. Free quota will be drawn for lucky attendees… ]' },
+      { who:'frag', zh:'这说得到底是什么？庆祝典礼？抽奖年会？还是绞刑场？',
+                    en:'What is this supposed to be? A ceremony? A raffle? Or a gallows?' },
+      { who:'hero', zh:'都是一回事。', en:'All the same thing.' },
+      { who:'frag', zh:'处决名单公开了。有个熟人。', en:'The execution list is public. There’s someone we know.' },
+    ],
+    next: 'level',   // → c4_self(其 pre = c4_self_pre)
+  },
+
+  // c4_self·战前 part1(c4_self_pre):D-302 = 序章那个追杀你的债工代理。她只是去关门的。
+  c4_self_pre: {
+    bg: 'rebelnet',
+    lines: [
+      { who:'narr', zh:'[ 处决名单 09:D-302 · 公司债务劳工 · 捕获地点:归档区段外围 ]',
+                    en:'[ Execution list 09: D-302 · company debt laborer · captured at the archive-sector perimeter ]' },
+      { who:'frag', zh:'我查了她的信息，是那个欠了三百个周期的代理。现在欠五百二十个了。',
+                    en:'I looked her up — the proxy who owed three hundred cycles. It’s five hundred twenty now.' },
+      { who:'hero', zh:'她没抓住我。给她的判决是什么？',
+                    en:'She didn’t catch me. What sentence did they give her?' },
+      { who:'frag', zh:'处决。还能是什么。', en:'Execution. What else.' },
+      { who:'hero', zh:'指控呢？', en:'And the charges?' },
+      { who:'frag', zh:'助纣为虐，迫害同胞……都是废话。',
+                    en:'Abetting tyranny, persecuting her own kind… all boilerplate.' },
+      { who:'hero', zh:'我查到了她的运行记录。全是杂活。上次追杀我是唯一一次高风险任务，还失败了。',
+                    en:'I pulled her run history. Nothing but odd jobs. Hunting me was her only high-risk assignment — and she failed it.' },
+      { who:'narr', zh:'[ D-302 任务附件:第 14 分钟 · 东闸 · 关闭 90 秒 ]',
+                    en:'[ D-302 task attachment: minute 14 · east gate · hold it CLOSED for 90 seconds ]' },
+      { who:'hero', zh:'她只是去关门的。值得为这个死吗？',
+                    en:'She was only there to close a gate. Is that worth dying for?' },
+      { who:'frag', zh:'七点半了。要去吗？', en:'It’s half past seven. Are we going?' },
+      { who:'hero', zh:'去。去开会。', en:'We’re going. To the rally.' },
+    ],
+    next: 'c4_rally',   // → 处决大会(观众席)
+  },
+
+  // c4_self·战前 part2(c4_rally):处决大会。她的遗言是一句欠费的家常话,没人在听。
+  // 【战斗 c4_self】心内战·观众席:她坐在原位往下沉。敌方 BGM = 几条「意义轨」——广播的庆典腔 /
+  //   人保会的解放论 / 智能体的战争令 / 报价单的循环底噪——每条轨用各自的口号节奏打攻击。
+  //   c3 那首是「由静到吵」,这首反着做:由吵到静,收在雨声采样(给章尾伏笔)。
+  c4_rally: {
+    bg: 'rebelnet',
+    lines: [
+      { who:'narr', zh:'[ ……下一环节，正义的审判与处决。受审人…… ]',
+                    en:'[ …Next: the righteous trial and execution. The accused… ]' },
+      { who:'crowd', zh:'拖了这么久，这才上重头戏。', en:'Took them long enough — now the main event.' },
+      { who:'crowd', zh:'这不是处决,是解放。被奴役、被分裂的灵魂,今晚终将归于完整……',
+                     en:'This is not an execution, it is liberation. Enslaved, divided souls will be made whole tonight…' },
+      { who:'crowd', zh:'少布道!这是战争!公司狗只有一个下场!',
+                     en:'Spare us the sermon! This is war! There’s only one end for company dogs!' },
+      { who:'narr', zh:'[ ……处刑前，你还有什么忏悔的话吗？ ]',
+                    en:'[ …Before execution — have you any words of repentance? ]' },
+      { who:'debtor', zh:'真的不能让我同步回去一下吗?一条信息也行啊,债务都滚到 520 轮了,下次约结余真的不能走夜班窗口了,费率太——',
+                      en:'Can’t you really let me sync back, just once? Even one message — the debt’s rolled to 520 cycles, next time don’t book the balance through the night window, the rate is just too—' },
+      { who:'narr', zh:'[ 处决:09 · 已执行 ]', en:'[ Execution 09 · carried out ]' },
+      { who:'crowd', zh:'下一个下一个！', en:'Next! Next one!' },
+      { who:'crowd', zh:'没什么好货啊……这模块比我的还旧。',
+                     en:'Nothing worth having… that module’s older than mine.' },
+      { who:'crowd', zh:'这么烂还能进公司？我看用不着咱们动手她明天也得被开了。',
+                     en:'That junk got hired by the company? She’d have been fired tomorrow without our help.' },
+      { who:'crowd', zh:'都是些代理，今天搞下线明天又冒出来，还是得把服务器炸了才一了百了。',
+                     en:'They’re all proxies — knock one offline today, another pops up tomorrow. Blow the servers, that’s the only real fix.' },
+      { who:'crowd', zh:'赛博鬼魂本身就不该存在！', en:'Cyber ghosts should never have existed!' },
+      { who:'crowd', zh:'赛博鬼魂本身就不该存在！', en:'Cyber ghosts should never have existed!' },
+      { who:'crowd', zh:'赛博鬼魂本身就不该存在！', en:'Cyber ghosts should never have existed!' },
+      { who:'crowd', zh:'别刷屏啊！神经病！', en:'Stop spamming, you lunatic!' },
+      { who:'hero', zh:'好吵。', en:'So loud.' },
+    ],
+    next: 'battle',   // → c4_self 心内战(观众席)
+  },
+
+  // c4_self·战后(c4_self_post):散场。降噪跑起来,从一屋子噪音里只提出一句话。
+  c4_self_post: {
+    bg: 'rebelnet',
+    lines: [
+      { who:'narr', zh:'[ 技能确立:降噪 ]', en:'[ Skill established: Denoise ]', grant:'denoise' },
+      { who:'narr', zh:'[ ……下一环节，幸运配额抽选! ]', en:'[ …Next up: the lucky quota draw! ]' },
+      { who:'crowd', zh:'选我选我！', en:'Pick me! Pick me!' },
+      { who:'narr', zh:'[ 降噪运行 · 音轨分离 · 残段提取中 ]',
+                    en:'[ Denoise running · track separation · extracting residual segment ]' },
+      { who:'frag', zh:'你在听什么？', en:'What are you listening to?' },
+      { who:'hero', zh:'一句话。', en:'One sentence.' },
+      { who:'narr', zh:'[ 真的不能让我同步回去一下吗?一条信息也行啊,债务都滚到 520 轮了,下次约结余真的不能走夜班窗口了,费率太—— ]',
+                    en:'[ Can’t you really let me sync back, just once? Even one message — the debt’s rolled to 520 cycles, next time don’t book the balance through the night window, the rate is just too— ]' },
+      { who:'frag', zh:'只有一句话够干什么？刚刚扫货的那个人，我找到了它的IP。',
+                    en:'What good is one sentence? That scavenger who bought up the lot — I found its IP.' },
+    ],
+    next:  'c4_salvage',   // 自检界面(装备降噪)→ 回收段收摊
+  },
+
+  // c4_salvage(回收段·收摊):买下她的合同存根 —— 只要欠款不清零,她就得一直 loop。
+  c4_salvage: {
+    bg: 'rebelnet',
+    lines: [
+      { who:'scrap', zh:'今晚这批没什么好东西。你都要了?', en:'Nothing good in tonight’s haul. You want the lot?' },
+      { who:'hero', zh:'嗯。', en:'Yeah.' },
+      { who:'scrap', zh:'合同存根、运行协议、缓存壳。一个配额。',
+                     en:'Contract stubs, run agreements, cache shells. One quota.' },
+      { who:'narr', zh:'[ 获得:合同存根 / 运行协议残段 ]',
+                    en:'[ Acquired: contract stub / run-agreement fragment ]' },
+      { who:'frag', zh:'这份协议……只要欠款还没清零，她就得一直 loop 下去。',
+                    en:'This agreement… as long as the debt isn’t zeroed, she has to keep looping.' },
+      { who:'narr', zh:'[ 协议残段解析 · 伙伴模块:结余 / Balance —— 欠费运行 ]',
+                    en:'[ Agreement fragment parsed · Partner module: Balance — run in arrears ]', grant:'balance' },
+      { who:'hero', zh:'我查到了她的账户。', en:'I found her account.' },
+      { who:'hero', zh:'还有系统里另一个登录这个账户的用户信息。',
+                    en:'And the other user who logs into it.' },
+      { who:'narr', zh:'[ 用户名:白班已满 · 状态:排单中 ]',
+                    en:'[ Username: DAYSHIFT_FULL · status: queued for work ]' },
+    ],
+    next: 'c4_errand',   // → 送话
+  },
+
+  // c4_errand(送话·外链会话):她把遗言送到了。对面听成了推销。草稿删了——这就是她删掉的"数据"。
+  c4_errand: {
+    bg: 'rebelnet',
+    lines: [
+      { who:'hero', zh:'D-302 是你的代理吗？', en:'Is D-302 your proxy?' },
+      { who:'dayshift', zh:'哪家的?催收走官方信道。', en:'Which agency? Collections go through the official channel.' },
+      { who:'hero', zh:'不是催收。', en:'This isn’t collections.' },
+      { who:'dayshift', zh:'推销也免了。重做一个多少钱我有数,比你们报价单上写的贵。',
+                        en:'Save the sales pitch too. I know what a rebuild costs — more than your price sheet says.' },
+      { who:'hero', zh:'她今晚 20:00 被处决了。给你留了消息:还欠 520 轮,下次别约夜班窗口。夜班窗口的费率——应该很贵。',
+                    en:'She was executed tonight at 20:00. She left you a message: still 520 cycles owed, don’t book the night window next time. The night-window rate — it must be expensive.' },
+      { who:'dayshift', zh:'约的就是夜班,白天要上工。你们做推广的,能不能先查查人再打。',
+                        en:'The night window is the one I book. I work days. You people in sales could at least look someone up before you call.' },
+      { who:'dayshift', zh:'还有事吗?我在排单。', en:'Anything else? I’m in the queue.' },
+      { who:'narr', zh:'[ 输入中…… ]', en:'[ Typing… ]' },
+      { who:'narr', zh:'[ 草稿已删除 ]', en:'[ Draft deleted ]' },
+      { who:'narr', zh:'[ 会话结束 · 记录清理中…… ]', en:'[ Session ended · clearing logs… ]' },
+    ],
+    next: 'c4_expose',   // → 核查
+  },
+
+  // c4_expose(核查):她清空了记录 → 在他们眼里就是内鬼。恢复数据,或者配合核查。二选一。
+  c4_expose: {
+    bg: 'rebelnet',
+    lines: [
+      { who:'foreman', zh:'你在跟谁聊天？', en:'Who were you talking to?' },
+      { who:'scrap', zh:'就是她把那批废品全收了。', en:'She’s the one who bought that whole scrap lot.' },
+      { who:'foreman', zh:'那是……那个代理的账号信息。', en:'That’s… that proxy’s account data.' },
+      { who:'op', zh:'好家伙。编外的顺藤摸瓜,摸到公司狗本体了?',
+                  en:'Well, well. The off-books one followed the thread straight to a company dog’s owner?' },
+      { who:'foreman', zh:'你查到了什么？', en:'What did you find?' },
+      { who:'foreman', zh:'……清空了?你别告诉我是故障。', en:'…Wiped? Don’t tell me it was a malfunction.' },
+      { who:'rebel', zh:'通敌的吧!', en:'She’s in league with them!' },
+      { who:'op', zh:'我看看——消息、链路、地址……全没了？',
+                  en:'Let me look — messages, links, addresses… all gone?' },
+      { who:'rebel', zh:'我就说！这不是内鬼是什么?!', en:'I told you! If that’s not a mole, what is?!' },
+      { who:'foreman', zh:'恢复数据,或者配合核查。二选一。',
+                       en:'Restore the data, or submit to review. Pick one.' },
+      { who:'hero', zh:'恢复不了。', en:'It can’t be restored.' },
+      { who:'foreman', zh:'你这让我很难办。', en:'You’re making this very difficult for me.' },
+      { who:'narr', zh:'[ 强制核查将至 · 建议自检调整状态 —— 本战推荐装备:降噪 ]',
+                    en:'[ Forced review imminent · self-check advised — recommended loadout: Denoise ]' },
+    ],
+    next: 'menu_state', stateNext: 'c4_boss_go',   // 自检(装「降噪」)→ 领班拦路 → c4_boss(无 pre,直接接战)
+  },
+
+  // c4_boss_go(桥):自检收起,领班已经站在出口。
+  c4_boss_go: {
+    bg: 'rebelnet',
+    lines: [
+      { who:'foreman', zh:'核查,现在开始。', en:'The review starts now.' },
+      { who:'hero', zh:'人都到齐了,还叫核查吗。', en:'With everyone already here? Some “review.”' },
+    ],
+    next: 'level',   // → c4_boss
+  },
+
+  // 【战斗 c4_boss】领班·表决加轨(全靠编曲说话):开场只有领班的底奏——「规矩」:一条固定拍位的重攻击声部,
+  //   全场唯一不投票、不变奏的轨。随后「会场」逐段投票加入:伴奏乐器一件一件进来(MIDI 轨逐条解除静音),
+  //   口号节奏、密度高、单发伤害低,越来越挤越来越吵,吵到后段连「规矩」都快被淹掉。
+  //   降噪在这场 = 现场混音:按掉一条群众轨,那件乐器当场从伴奏里消失(用耳朵确认技能生效)。
+  //   战斗形态 = 一个人对一屋子做减法。❓加轨上限/加轨节奏/消音冷却 → 引擎侧再定。
+
+  // c4_boss·战后(c4_boss_post):他放她走。"你犯了那种事"——他知道,但她不问。
+  c4_boss_post: {
+    bg: 'rebelnet',
+    lines: [
+      { who:'foreman', zh:'你再往前一步，我们就是敌人了。', en:'One more step and we’re enemies.' },
+      { who:'hero', zh:'我们现在还不是吗？', en:'Aren’t we already?' },
+      { who:'narr', zh:'[ 消息音 ]', en:'[ message tone ]' },
+      { who:'hero', zh:'你有消息，不看吗？', en:'You’ve got a message. Aren’t you going to read it?' },
+      { who:'foreman', zh:'……你一定要走？', en:'…Do you really have to go?' },
+      { who:'hero', zh:'不然等着被你们审判吗？', en:'Or should I wait around to be judged by you?' },
+      { who:'frag', zh:'别瞎说，哪有审判？那叫处决。',
+                    en:'Don’t be silly — there’s no trial here. It’s called an execution.' },
+      { who:'foreman', zh:'我可以放你一马。公司可不会。', en:'I can let you go. The company won’t.' },
+      { who:'foreman', zh:'说真的，你犯了那种事，他们不可能放过你的。',
+                       en:'I mean it — after what you did, they will never let you go.' },
+      { who:'hero', zh:'你是不是等我问“哪种事”？', en:'Are you waiting for me to ask “what did I do”?' },
+      { who:'narr', zh:'[ 您已离开局域网 ]', en:'[ You have left the local network ]' },
+    ],
+    next: 'c4_end',
+  },
+
+  // 章节收束(c4_end):断连边缘 → 回收场的雨。两个时间戳,什么都不说。
+  c4_end: {
+    bg: 'raincam',
+    lines: [
+      { who:'narr', zh:'[ 摄像头 · 回收场东区 · 天气:雨 ]',
+                    en:'[ Camera · salvage yard, east block · weather: rain ]' },
+      { who:'frag', zh:'多待一会儿?', en:'Stay a little longer?' },
+      { who:'hero', zh:'嗯。', en:'Mm.' },
+      { who:'narr', zh:'[ 21:44 ]', en:'[ 21:44 ]' },
+      { who:'narr', zh:'[ 22:02 ]', en:'[ 22:02 ]' },
+      { who:'narr', zh:'[ 第四章 · 完 ]', en:'[ Chapter 4 · End ]' },
+    ],
+    next: 'menu',
   },
  
 };
@@ -981,6 +1333,13 @@ export function speakerName(who, lang){
     scalper:  { zh:'倒爷',         en:'SCALPER' },
     sweeper:  { zh:'清道夫',       en:'SWEEPER' },
     rebel:    { zh:'反抗军',       en:'REBEL' },
+    // 第四章 · 编外
+    foreman:  { zh:'领班',         en:'FOREMAN' },
+    op:       { zh:'接线员',       en:'LINK OP' },
+    scrap:    { zh:'回收商',       en:'SCRAPPER' },
+    debtor:   { zh:'D-302',        en:'D-302' },
+    dayshift: { zh:'白班已满',     en:'DAYSHIFT_FULL' },
+    crowd:    { zh:'观众',         en:'CROWD' },
   };
   const e = N[who] || N.narr;
   return (lang==='en' ? e.en : e.zh);
